@@ -1,0 +1,15 @@
+{
+  "name": "gcpoker",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w packages/shared && npm run build -w packages/engine && concurrently \"npm run build -w packages/server\" \"npm run build -w packages/web\" \"npm run build -w packages/bot\"",
+    "dev": "concurrently -n server,web,bot -c blue,green,yellow \"npm run dev -w packages/server\" \"npm run dev -w packages/web\" \"npm run dev -w packages/bot\"",
+    "test": "npm run test -w packages/engine"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

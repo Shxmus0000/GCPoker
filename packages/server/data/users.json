@@ -1,0 +1,20 @@
+[
+  {
+    "id": "2ccb42ca-d061-49c6-95ea-c8b001852fa6",
+    "username": "testuser",
+    "name": "testuser",
+    "balance": 10000,
+    "passwordHash": "2d26725ae587f8e9c16dfcbe7ed22103fefc5142890559d841ff9b4b564b9afbf496cc6fb1901773e783f8b5130f0783fa34f33b2aa7c23753fc1a94a34036b7",
+    "salt": "0e1a9a2a3f956f306e53e00645e25fb9",
+    "createdAt": 1779210180725
+  },
+  {
+    "id": "ae782454-85dd-4e26-8167-d0612dd197bc",
+    "username": "sonodio",
+    "name": "sonodio",
+    "balance": 9998,
+    "passwordHash": "51178800de3a56de1d1ebfde8a92f0349c38b46f685beb36fb0c7779fec9ca9c086c858ff8d9157080f24bc8130673cb56ad70e2c2cac7932c674eee25b60caf",
+    "salt": "44e887f70d5ffc6573ed7717b13104da",
+    "createdAt": 1779210770011
+  }
+]
