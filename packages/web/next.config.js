@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  transpilePackages: ['@gcpoker/shared'],
-  // Prevent V8 access violation crash on Windows during production build
+  transpilePackages: ['@gcpoker/shared', '@gcpoker/engine'],
+  swcMinify: false,
   experimental: {
     webpackBuildWorker: false,
   },

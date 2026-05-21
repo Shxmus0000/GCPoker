@@ -18,6 +18,7 @@ export interface GameConfig {
   maxPlayers?: number
   minPlayers?: number
   buyIn?: number
+  tableId?: string
 }
 
 interface PotAssignment {
@@ -37,7 +38,7 @@ export class GameEngine {
   }
 
   addPlayer(id: string, name: string, stack: number): void {
-    if (this.state.players.length >= 9) throw new Error('Table full')
+    if (this.state.players.length >= 8) throw new Error('Table full')
     if (this.state.phase !== GamePhase.Waiting) throw new Error('Game in progress')
 
     const seatIndex = this.findEmptySeat()
@@ -86,6 +87,14 @@ export class GameEngine {
 
   startHand(): boolean {
     this.state.phase = GamePhase.Waiting
+
+    // Auto-rebuy any busted player (100 BB) so the game can continue
+    for (const p of this.state.players) {
+      if (p.stack <= 0) {
+        p.stack = this.state.blinds.big * 100
+      }
+    }
+
     const players = this.getActivePlayers()
     if (players.length < 2) return false
 
@@ -371,10 +380,9 @@ export class GameEngine {
       eligiblePlayerIds: p.eligiblePlayerIds,
     }))
 
-    // Reveal non-folded players' cards and evaluate their best hand
+    // Evaluate non-folded players' best hands; cards stay hidden by default
     for (const p of this.state.players) {
       if (!p.isFolded && p.holeCards && this.state.communityCards.length >= 3) {
-        p.cardsRevealed = true
         p.bestHand = evaluateHand(p.holeCards, this.state.communityCards)
       }
     }
@@ -413,6 +421,11 @@ export class GameEngine {
     const totalPot = this.state.players.reduce((s, p) => s + p.totalBet, 0)
     winner.stack += totalPot
     for (const p of this.state.players) p.totalBet = 0
+
+    // Set best hand for display purposes
+    if (winner.holeCards && this.state.communityCards.length >= 3) {
+      winner.bestHand = evaluateHand(winner.holeCards, this.state.communityCards)
+    }
 
     this.recordHand([{ playerId: winner.id, amount: totalPot }])
   }
@@ -468,7 +481,7 @@ export class GameEngine {
     for (let i = 1; i <= players.length; i++) {
       const idx = (current + i) % players.length
       const p = players[idx]
-      if (!p.isFolded && !p.isAllIn && p.stack > 0) return idx
+      if (!p.isFolded && !p.isAllIn) return idx
     }
     return current
   }
@@ -542,6 +555,7 @@ export class GameEngine {
   private createInitialState(config: GameConfig): GameState {
     return {
       id: crypto.randomUUID?.() ?? Math.random().toString(36),
+      tableId: config.tableId,
       variant: config.variant ?? GameVariant.TexasHoldem,
       format: config.format ?? GameFormat.Cash,
       phase: GamePhase.Waiting,

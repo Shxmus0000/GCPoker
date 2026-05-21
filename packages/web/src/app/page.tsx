@@ -1,15 +1,16 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { io, Socket } from 'socket.io-client'
 import {
   GameState, Player, Card, TableConfig, TableStatus, GamePhase,
   TournamentSummary, PlayerGameSummary, GameStatus,
   HAND_RANK_NAMES, HandSummary, PlayerStatsInfo,
-  ChatMessage,
+  ChatMessage, HandRank, EvaluatedHand,
   ServerEvent, ClientEvent, ActionType, JoinTableRequest,
   TournamentFormat,
 } from '@gcpoker/shared'
+import { evaluateHand, calculateWinProbability } from '@gcpoker/engine'
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? 'http://localhost:3001'
 const STORAGE_KEY = 'gcpoker_token'
@@ -17,77 +18,181 @@ const STORAGE_KEY = 'gcpoker_token'
 const SUIT_SYMBOLS: Record<string, string> = { h: '\u2665', d: '\u2666', c: '\u2663', s: '\u2660' }
 const SUIT_COLORS: Record<string, string> = { h: '#e74c3c', d: '#e74c3c', c: '#2c3e50', s: '#2c3e50' }
 const RANK_LABELS: Record<number, string> = { 2: '2', 3: '3', 4: '4', 5: '5', 6: '6', 7: '7', 8: '8', 9: '9', 10: '10', 11: 'J', 12: 'Q', 13: 'K', 14: 'A' }
+const SUIT_NAMES: Record<string, string> = { h: 'Hearts', d: 'Diamonds', c: 'Clubs', s: 'Spades' }
+
+function straightRangeText(cards: Card[]): string {
+  const ranks = cards.map(c => c.rank).sort((a, b) => a - b)
+  return `${RANK_LABELS[ranks[0]]} to ${RANK_LABELS[ranks[4]]}`
+}
+
+function getHandDescription(hand: EvaluatedHand): string {
+  const { rank, kickers, bestCards } = hand
+  switch (rank) {
+    case HandRank.RoyalFlush:
+      return `Royal Flush (${SUIT_NAMES[bestCards[0].suit]})`
+    case HandRank.StraightFlush:
+      return `Straight Flush, ${straightRangeText(bestCards)} (${SUIT_NAMES[bestCards[0].suit]})`
+    case HandRank.FourOfAKind:
+      return `Four of a Kind, ${RANK_LABELS[kickers[0]]}s`
+    case HandRank.FullHouse:
+      return `Full House, ${RANK_LABELS[kickers[0]]}s full of ${RANK_LABELS[kickers[1]]}s`
+    case HandRank.Flush:
+      return `Flush (${SUIT_NAMES[bestCards[0].suit]})`
+    case HandRank.Straight:
+      return `Straight, ${straightRangeText(bestCards)}`
+    case HandRank.ThreeOfAKind:
+      return `Three of a Kind, ${RANK_LABELS[kickers[0]]}s`
+    case HandRank.TwoPair:
+      return `Two Pair, ${RANK_LABELS[kickers[0]]}s and ${RANK_LABELS[kickers[1]]}s`
+    case HandRank.OnePair:
+      return `Pair of ${RANK_LABELS[kickers[0]]}s`
+    case HandRank.HighCard:
+      return `${RANK_LABELS[kickers[0]]} High`
+    default:
+      return HAND_RANK_NAMES[rank]
+  }
+}
 
 // ─── Card Component ──────────────────────────────────────
 
 function CardView({ card, hidden, small }: { card?: Card; hidden?: boolean; small?: boolean }) {
-  const w = small ? 48 : 66
-  const h = small ? 66 : 92
-  const br = small ? 6 : 8
+  const w = small ? 54 : 74
+  const h = small ? 74 : 102
+  const br = small ? 7 : 9
   if (hidden || !card) {
     return (
-      <div style={{ width: w, height: h, borderRadius: br, background: 'linear-gradient(135deg, #1a3a5c, #2a5a8c)', border: '1px solid #3a6a9c', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: small ? 16 : 24, color: '#557', fontWeight: 700 }}>
+      <div style={{ width: w, height: h, borderRadius: br, background: 'linear-gradient(135deg, #1a3a5c, #2a5a8c)', border: '1px solid #3a6a9c', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: small ? 20 : 30, color: '#557', fontWeight: 700 }}>
         ?
       </div>
     )
   }
   return (
-    <div style={{ width: w, height: h, borderRadius: br, background: '#fff', border: '1px solid #ccc', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontSize: small ? 14 : 17, fontWeight: 700, color: SUIT_COLORS[card.suit], boxShadow: '0 3px 8px rgba(0,0,0,0.25)', position: 'relative' }}>
-      <span style={{ position: 'absolute', top: 4, left: 6, fontSize: small ? 11 : 14 }}>{RANK_LABELS[card.rank]}{SUIT_SYMBOLS[card.suit]}</span>
-      <span style={{ fontSize: small ? 22 : 34 }}>{SUIT_SYMBOLS[card.suit]}</span>
+    <div style={{ width: w, height: h, borderRadius: br, background: '#fff', border: '1px solid #ccc', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontWeight: 700, color: SUIT_COLORS[card.suit], boxShadow: '0 3px 8px rgba(0,0,0,0.25)', position: 'relative' }}>
+      <span style={{ position: 'absolute', top: 3, left: 5, fontSize: small ? 16 : 22 }}>{RANK_LABELS[card.rank]}{SUIT_SYMBOLS[card.suit]}</span>
+      <span style={{ fontSize: small ? 32 : 48 }}>{SUIT_SYMBOLS[card.suit]}</span>
     </div>
   )
 }
 
-// ─── SEAT POSITIONS (6-max) ─────────────────────────────
-
-const SEAT_POSITIONS: Record<number, React.CSSProperties> = {
-  0: { bottom: '4%', left: '50%', transform: 'translateX(-50%)' },
-  1: { bottom: '4%', left: '12%' },
-  2: { bottom: '4%', right: '12%' },
-  3: { top: '6%', left: '10%' },
-  4: { top: '6%', right: '10%' },
-  5: { top: '6%', left: '50%', transform: 'translateX(-50%)' },
+// ─── Seat Position Calibration ──────────────────────────
+interface CalibrationData {
+  seats: Array<{ top: string; left: string }>
+  communityCards?: { top: string; left: string }
+  pot?: { top: string; left: string }
 }
 
-const SEAT_LABELS = ['Dealer', 'SB', 'BB', 'UTG', 'MP', 'CO']
+const DEFAULT_SEAT_POSITIONS: Record<number, React.CSSProperties> = {
+  0: { bottom: '4%', left: '50%', transform: 'translateX(-50%)' },
+  1: { bottom: '4%', left: '8%' },
+  2: { bottom: '4%', right: '8%' },
+  3: { top: '50%', left: '4%', transform: 'translateY(-50%)' },
+  4: { top: '50%', right: '4%', transform: 'translateY(-50%)' },
+  5: { top: '6%', left: '10%' },
+  6: { top: '6%', left: '50%', transform: 'translateX(-50%)' },
+  7: { top: '6%', right: '10%' },
+}
+
+const SEAT_LABELS = ['Dealer', 'SB', 'BB', 'UTG', 'UTG+1', 'MP', 'HJ', 'CO']
+
+function getCalibrationData(): CalibrationData | null {
+  try {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('gcpoker_seats')
+      return stored ? JSON.parse(stored) : null
+    }
+  } catch {}
+  return null
+}
+
+function getSeatStyle(index: number): React.CSSProperties {
+  const data = getCalibrationData()
+  if (data?.seats?.[index]) {
+    return { top: data.seats[index].top, left: data.seats[index].left, transform: 'translate(-50%, -50%)' }
+  }
+  return DEFAULT_SEAT_POSITIONS[index] ?? {}
+}
+
+function getCommunityCardsStyle(): React.CSSProperties {
+  const data = getCalibrationData()
+  if (data?.communityCards) {
+    return { top: data.communityCards.top, left: data.communityCards.left, transform: 'translate(-50%, -50%)' }
+  }
+  return { top: '35%', left: '50%', transform: 'translate(-50%, -50%)' }
+}
+
+function getPotStyle(): React.CSSProperties {
+  const data = getCalibrationData()
+  if (data?.pot) {
+    return { top: data.pot.top, left: data.pot.left, transform: 'translate(-50%, -50%)' }
+  }
+  return { top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }
+}
 
 // ─── Player Seat ─────────────────────────────────────────
 
-function PlayerSeat({ player, isCurrent, isMe, index, positionLabel }: {
-  player: Player; isCurrent: boolean; isMe: boolean; index: number; positionLabel: string
+function PlayerSeat({ player, isCurrent, isMe, index, positionLabel, communityCards, phase }: {
+  player: Player; isCurrent: boolean; isMe: boolean; index: number; positionLabel: string;
+  communityCards: Card[]; phase: GamePhase
 }) {
   const showCards = (isMe || player.cardsRevealed) && player.holeCards && !player.isFolded
   const isWinner = player.bestHand && !player.isFolded
+
+  const handInfo = useMemo(() => {
+    if (!isMe || !player.holeCards || player.isFolded || phase >= GamePhase.Showdown) return null
+    const winProb = calculateWinProbability(player.holeCards, communityCards, 400)
+    if (communityCards.length >= 3) {
+      const evaluated = evaluateHand(player.holeCards, communityCards)
+      return { handType: getHandDescription(evaluated), winProb }
+    }
+    if (player.holeCards[0].rank === player.holeCards[1].rank) {
+      return { handType: `Pocket ${RANK_LABELS[player.holeCards[0].rank]}s`, winProb }
+    }
+    const highRank = Math.max(player.holeCards[0].rank, player.holeCards[1].rank)
+    return { handType: `${RANK_LABELS[highRank]} High`, winProb }
+  }, [isMe, player.holeCards, player.isFolded, communityCards, phase])
+
   return (
     <div style={{
-      position: 'absolute', ...SEAT_POSITIONS[index],
+      position: 'absolute', ...getSeatStyle(index),
       padding: '8px 14px', borderRadius: 12,
       background: isCurrent ? 'rgba(46, 204, 113, 0.25)' : isWinner ? 'rgba(241, 196, 15, 0.12)' : isMe ? 'rgba(52, 152, 219, 0.15)' : 'rgba(255,255,255,0.04)',
       border: isCurrent ? '2px solid #2ecc71' : isWinner ? '1px solid #f1c40f' : isMe ? '1px solid #3498db' : '1px solid rgba(255,255,255,0.08)',
       display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, minWidth: 120, transition: 'all 0.2s',
-      opacity: player.isFolded ? 0.35 : 1,
+      opacity: 1,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontWeight: 700, fontSize: 15, color: player.isFolded ? '#666' : '#eee' }}>{player.name}</span>
-        {player.isDealer && <span style={{ fontSize: 10, background: '#f1c40f', color: '#222', borderRadius: 3, padding: '2px 6px', fontWeight: 700 }}>D</span>}
+        <span style={{ fontWeight: 700, fontSize: 15, color: player.isFolded ? '#888' : '#eee' }}>{player.name}</span>
+        {player.isFolded && <span style={{ fontSize: 10, background: '#e74c3c', color: '#fff', borderRadius: 3, padding: '2px 6px', fontWeight: 700 }}>FOLD</span>}
+        {player.isDealer && !player.isFolded && <span style={{ fontSize: 10, background: '#f1c40f', color: '#222', borderRadius: 3, padding: '2px 6px', fontWeight: 700 }}>D</span>}
         {player.isAllIn && <span style={{ fontSize: 10, background: '#e67e22', color: '#fff', borderRadius: 3, padding: '2px 6px' }}>AI</span>}
       </div>
-      <div style={{ fontSize: 14, color: player.isFolded ? '#555' : '#f1c40f', fontWeight: 700 }}>${player.stack}</div>
-      {player.currentBet > 0 && (
+      <div style={{ fontSize: 14, color: player.isFolded ? '#666' : '#f1c40f', fontWeight: 700 }}>${player.stack}</div>
+      {player.currentBet > 0 && !player.isFolded && (
         <div style={{ fontSize: 12, color: '#e67e22', background: 'rgba(230,126,34,0.15)', padding: '2px 10px', borderRadius: 4 }}>Bet ${player.currentBet}</div>
       )}
-      <div style={{ fontSize: 10, color: '#666' }}>{positionLabel}</div>
+      <div style={{ fontSize: 10, color: player.isFolded ? '#555' : '#666' }}>{positionLabel}</div>
       {showCards && (
         <div style={{ display: 'flex', gap: 3, marginTop: 2 }}>
           <CardView card={player.holeCards![0]} small />
           <CardView card={player.holeCards![1]} small />
         </div>
       )}
-      {!showCards && isMe && !player.isFolded && (
+      {!showCards && !player.isFolded && (
         <div style={{ display: 'flex', gap: 3, marginTop: 2 }}>
           <CardView hidden small />
           <CardView hidden small />
+        </div>
+      )}
+      {handInfo && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 2 }}>
+          {handInfo.handType && (
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#2ecc71', background: 'rgba(46,204,113,0.12)', padding: '2px 8px', borderRadius: 4 }}>
+              {handInfo.handType}
+            </span>
+          )}
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#3498db', background: 'rgba(52,152,219,0.12)', padding: '2px 8px', borderRadius: 4 }}>
+            {Math.round(handInfo.winProb * 100)}%
+          </span>
         </div>
       )}
       {player.bestHand && player.cardsRevealed && (
@@ -95,7 +200,7 @@ function PlayerSeat({ player, isCurrent, isMe, index, positionLabel }: {
           fontSize: 12, fontWeight: 700, color: '#2ecc71',
           background: 'rgba(46,204,113,0.12)', padding: '2px 10px', borderRadius: 4, marginTop: 3,
         }}>
-          {HAND_RANK_NAMES[player.bestHand.rank]}
+          {getHandDescription(player.bestHand)}
         </div>
       )}
     </div>
@@ -110,7 +215,7 @@ function ActBtn({ label, color, disabled, onClick }: {
   return (
     <button onClick={onClick} disabled={disabled} style={{
       padding: '12px 28px', borderRadius: 8, border: 'none',
-      background: disabled ? '#444' : color, color: '#fff',
+      background: disabled ? '#2a2a3e' : color, color: '#fff',
       fontWeight: 700, fontSize: 16, cursor: disabled ? 'not-allowed' : 'pointer',
       opacity: disabled ? 0.5 : 1, transition: 'all 0.15s',
       boxShadow: disabled ? 'none' : '0 3px 8px rgba(0,0,0,0.35)',
@@ -122,17 +227,94 @@ function ActBtn({ label, color, disabled, onClick }: {
 
 // ─── Table View ──────────────────────────────────────────
 
+// ─── Table Hand History Modal ────────────────────────────
+
+function TableHandHistoryModal({ tableId, onClose, onSelectHand }: {
+  tableId: string; onClose: () => void; onSelectHand: (hand: HandSummary) => void
+}) {
+  const [hands, setHands] = useState<HandSummary[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    fetch(`${WS_URL}/api/hands/table/${tableId}`)
+      .then(r => r.json())
+      .then(data => setHands(data))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [tableId])
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      zIndex: 150, backdropFilter: 'blur(4px)',
+    }}>
+      <div style={{
+        background: 'linear-gradient(135deg, #1a1a2e, #16213e)',
+        borderRadius: 20, padding: '24px 28px',
+        border: '1px solid rgba(255,255,255,0.12)',
+        width: '90%', maxWidth: 600, maxHeight: '80vh',
+        display: 'flex', flexDirection: 'column',
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ fontSize: 20, fontWeight: 800, color: '#eee' }}>Table History</div>
+          <button onClick={onClose} style={{
+            padding: '6px 14px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.15)',
+            background: 'transparent', color: '#888', cursor: 'pointer', fontSize: 13,
+          }}>Close</button>
+        </div>
+
+        {loading ? (
+          <div style={{ textAlign: 'center', color: '#888', padding: 40 }}>Loading hands...</div>
+        ) : hands.length === 0 ? (
+          <div style={{ textAlign: 'center', color: '#888', padding: 40, background: 'rgba(255,255,255,0.03)', borderRadius: 12 }}>
+            No hands played at this table yet.
+          </div>
+        ) : (
+          <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {hands.map(h => (
+              <div key={h.handId} onClick={() => onSelectHand(h)} style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: '10px 14px', borderRadius: 8,
+                background: 'rgba(255,255,255,0.03)', cursor: 'pointer',
+                transition: 'all 0.15s',
+              }}
+                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)' }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.03)' }}>
+                <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, color: '#666', minWidth: 40 }}>#{h.handId}</span>
+                  <div>
+                    <div style={{ fontSize: 13, color: '#ccc' }}>{h.winnerName} wins ${h.winAmount}</div>
+                    <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                      {new Date(h.timestamp).toLocaleString()} &middot; Pot: ${h.potSize} &middot; {h.actionCount} actions
+                    </div>
+                  </div>
+                </div>
+                <span style={{ fontSize: 11, color: '#888' }}>{h.playerNames.length}p</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function TableView({
-  gameState, socket, myId, onLeave, hands,
+  gameState, socket, myId, onLeave, onViewHand,
 }: {
-  gameState: GameState; socket: Socket; myId: string; onLeave: () => void; hands: HandSummary[]
+  gameState: GameState; socket: Socket; myId: string; onLeave: () => void; onViewHand?: (hand: HandSummary) => void
 }) {
   const [legalActions, setLegalActions] = useState<ActionType[]>([])
   const [betAmount, setBetAmount] = useState(0)
   const [handResult, setHandResult] = useState<string | null>(null)
   const [showdown, setShowdown] = useState(false)
+  const [showdownDismissable, setShowdownDismissable] = useState(false)
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [chatInput, setChatInput] = useState('')
+  const [showTableHistory, setShowTableHistory] = useState(false)
+  const [tableHistoryHand, setTableHistoryHand] = useState<HandSummary | null>(null)
 
   useEffect(() => {
     const handler = (data: { playerId: string; legalActions: ActionType[] }) => {
@@ -145,18 +327,33 @@ function TableView({
 
   useEffect(() => {
     if (gameState.phase === GamePhase.Complete) {
-      const winners = gameState.players.filter(p => !p.isFolded && p.bestHand)
+      const nonFolded = gameState.players.filter(p => !p.isFolded)
+      const winners = nonFolded.filter(p => p.bestHand)
+      const winner = winners.length > 0 ? winners[0] : nonFolded[0]
       const myPlayer = gameState.players.find(p => p.id === myId)
-      const iWon = myPlayer && winners.some(w => w.id === myId)
+      const iWon = myPlayer && winner?.id === myId
       if (myPlayer) {
         setShowdown(true)
-        setHandResult(iWon ? `You won!` : `${winners[0]?.name ?? 'Player'} wins`)
+        setShowdownDismissable(false)
+        setHandResult(iWon ? 'You won!' : `${winner?.name ?? 'Player'} wins`)
+        // Allow dismissing after 4 seconds (only for practice/AI tables)
+        if (gameState.players.some(p => p.id.startsWith('ai-'))) {
+          setTimeout(() => setShowdownDismissable(true), 4000)
+        }
       }
-    } else {
+    }
+  }, [gameState.phase, gameState.handCount, myId])
+
+  // When the server starts the next hand (after Continue), dismiss overlay
+  const prevPhaseRef = useRef(gameState.phase)
+  useEffect(() => {
+    const prev = prevPhaseRef.current
+    prevPhaseRef.current = gameState.phase
+    if (prev === GamePhase.Complete && gameState.phase !== GamePhase.Complete && showdown) {
       setShowdown(false)
       setHandResult(null)
     }
-  }, [gameState.phase, gameState.handCount, myId])
+  }, [gameState.phase, showdown])
 
   useEffect(() => {
     const handler = (msg: ChatMessage) => {
@@ -206,6 +403,10 @@ function TableView({
           <span style={{ color: '#f1c40f', fontWeight: 700, fontSize: 18 }}>Pot: ${gameState.pot.main}</span>
           <span style={{ color: '#3498db', fontSize: 16, fontWeight: 600 }}>{phaseLabels[gameState.phase] ?? ''}</span>
           <span style={{ fontSize: 14, color: '#888' }}>Hand #{gameState.handCount}</span>
+          <button onClick={() => setShowTableHistory(true)} style={{
+            padding: '6px 14px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.2)',
+            background: 'rgba(255,255,255,0.08)', color: '#ccc', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+          }}>History</button>
         </div>
         <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
           {myPlayer && <span style={{ color: '#3498db', fontSize: 16, fontWeight: 700 }}>Stack: ${myPlayer.stack}</span>}
@@ -221,14 +422,15 @@ function TableView({
         flex: 1, position: 'relative', overflow: 'hidden',
       }}>
         <div style={{
-          position: 'absolute', inset: '2vh 2vw',
-          background: 'radial-gradient(ellipse at center, #1a7a4a, #0d4a2b)',
-          borderRadius: 'min(6vw, 60px)', border: '4px solid #3a2a1a',
-          boxShadow: 'inset 0 0 120px rgba(0,0,0,0.4), 0 8px 40px rgba(0,0,0,0.6)',
+          position: 'absolute', inset: 0,
+          backgroundImage: 'url(/poker-table.png)',
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          backgroundRepeat: 'no-repeat',
         }}>
           {/* Community cards */}
           <div style={{
-            position: 'absolute', top: '35%', left: '50%', transform: 'translate(-50%, -50%)',
+            position: 'absolute', ...getCommunityCardsStyle(),
             display: 'flex', gap: 8,
           }}>
             {Array.from({ length: 5 }).map((_, i) => (
@@ -238,7 +440,7 @@ function TableView({
 
           {/* Pot */}
           <div style={{
-            position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+            position: 'absolute', ...getPotStyle(),
             color: '#f1c40f', fontSize: 18, fontWeight: 700,
             background: 'rgba(0,0,0,0.4)', padding: '4px 20px', borderRadius: 10,
           }}>
@@ -248,7 +450,8 @@ function TableView({
           {/* Players */}
           {gameState.players.map((p, i) => (
             <PlayerSeat key={p.id} player={p} index={i} isCurrent={currentPlayer?.id === p.id && isMyTurn}
-              isMe={p.id === myId} positionLabel={positionLabels[i]} />
+              isMe={p.id === myId} positionLabel={positionLabels[i]}
+              communityCards={gameState.communityCards} phase={gameState.phase} />
           ))}
 
           {/* Chat Overlay */}
@@ -296,7 +499,7 @@ function TableView({
                       {gameState.pot.main > 0 ? `${Math.round(clamped / (gameState.pot.main + toCall) * 100)}%` : '—'}
                     </span>
                     <input type="range" min={betMin} max={betMax} value={clamped} onChange={e => setBetAmount(Number(e.target.value))} style={{ width: 120 }} />
-                    <input type="number" min={betMin} max={betMax} value={clamped} onChange={e => setBetAmount(Math.max(betMin, Math.min(Number(e.target.value), betMax)))} style={{ width: 70, padding: '5px 8px', borderRadius: 4, border: '1px solid #444', background: '#222', color: '#eee', fontSize: 13, textAlign: 'center' }} />
+                    <input type="number" min={betMin} max={betMax} value={clamped} onChange={e => setBetAmount(Math.max(betMin, Math.min(Number(e.target.value), betMax)))} style={{ width: 70, padding: '5px 8px', borderRadius: 4, border: '1px solid rgba(255,255,255,0.15)', background: '#16162a', color: '#eee', fontSize: 13, textAlign: 'center' }} />
                   </div>
                   <ActBtn label={isRaise ? `Raise $${clamped}` : `Bet $${clamped}`} color="#e67e22" onClick={() => act(isRaise ? ActionType.Raise : ActionType.Bet, clamped)} />
                 </>
@@ -356,29 +559,81 @@ function TableView({
               {handResult}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 16 }}>
-              {gameState.players.filter(p => !p.isFolded && p.bestHand).sort((a, b) => (b.bestHand?.rank ?? 0) - (a.bestHand?.rank ?? 0)).map(p => (
+              {gameState.players.filter(p => !p.isFolded).map(p => (
                 <div key={p.id} style={{
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                   padding: '10px 16px', background: 'rgba(255,255,255,0.05)', borderRadius: 10,
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                     <span style={{ fontWeight: 700, fontSize: 16 }}>{p.name}</span>
-                    {p.holeCards && (
+                    {p.holeCards && p.cardsRevealed && (
                       <div style={{ display: 'flex', gap: 4 }}>
                         <CardView card={p.holeCards[0]} small />
                         <CardView card={p.holeCards[1]} small />
                       </div>
                     )}
                   </div>
-                  <span style={{ color: '#2ecc71', fontWeight: 700, fontSize: 15 }}>
-                    {HAND_RANK_NAMES[p.bestHand!.rank]}
-                  </span>
+                  {p.bestHand && (
+                    <span style={{ color: '#2ecc71', fontWeight: 700, fontSize: 15 }}>
+                      {getHandDescription(p.bestHand)}
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
-            <div style={{ fontSize: 15, color: '#888' }}>
+            <div style={{ fontSize: 15, color: '#888', marginBottom: 16 }}>
               Pot: ${gameState.pot.main}
             </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 16 }}>
+              {myPlayer && myPlayer.holeCards && !myPlayer.isFolded && (
+                <button onClick={() => socket.emit(ClientEvent.ShowCards)} style={{
+                  padding: '10px 24px', borderRadius: 8, border: '1px solid #3498db',
+                  background: 'transparent', color: '#3498db', cursor: 'pointer',
+                  fontSize: 15, fontWeight: 600,
+                }}>
+                  {myPlayer.cardsRevealed ? 'Hide My Cards' : 'Show My Cards'}
+                </button>
+              )}
+              {showdownDismissable && gameState.players.some(p => p.id.startsWith('ai-')) && (
+                <button onClick={() => {
+                  setShowdown(false)
+                  setHandResult(null)
+                  socket.emit(ClientEvent.Continue)
+                }} style={{
+                  padding: '10px 24px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)',
+                  background: 'transparent', color: '#888', cursor: 'pointer',
+                  fontSize: 15, fontWeight: 600,
+                }}>
+                  Continue
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Table Hand History Modal */}
+      {showTableHistory && !tableHistoryHand && gameState.tableId && (
+        <TableHandHistoryModal
+          tableId={gameState.tableId}
+          onClose={() => setShowTableHistory(false)}
+          onSelectHand={(hand) => setTableHistoryHand(hand)}
+        />
+      )}
+      {tableHistoryHand && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 150, backdropFilter: 'blur(4px)',
+        }}>
+          <div style={{
+            background: 'linear-gradient(135deg, #1a1a2e, #16213e)',
+            borderRadius: 20, padding: '24px 28px',
+            border: '1px solid rgba(255,255,255,0.12)',
+            width: '90%', maxWidth: 700, maxHeight: '85vh',
+            overflow: 'auto',
+          }}>
+            <HandReplayer hand={tableHistoryHand} onBack={() => setTableHistoryHand(null)} />
           </div>
         </div>
       )}
@@ -388,7 +643,7 @@ function TableView({
 
 // ─── Auth Screen ─────────────────────────────────────────
 
-function AuthScreen({ onAuth }: { onAuth: (token: string) => void }) {
+function AuthScreen({ onAuth, onSignup }: { onAuth: (token: string) => void; onSignup?: (token: string) => void }) {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -408,7 +663,11 @@ function AuthScreen({ onAuth }: { onAuth: (token: string) => void }) {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Authentication failed')
       localStorage.setItem(STORAGE_KEY, data.token)
-      onAuth(data.token)
+      if (mode === 'signup' && onSignup) {
+        onSignup(data.token)
+      } else {
+        onAuth(data.token)
+      }
     } catch (err: any) {
       setError(err.message)
     } finally {
@@ -422,7 +681,7 @@ function AuthScreen({ onAuth }: { onAuth: (token: string) => void }) {
       padding: 24,
     }}>
       <div style={{
-        background: '#111', borderRadius: 20, padding: '40px 36px',
+        background: '#1a1a2e', borderRadius: 20, padding: '40px 36px',
         border: '1px solid rgba(255,255,255,0.08)', boxShadow: '0 24px 64px rgba(0,0,0,0.5)',
         width: '100%', maxWidth: 400,
       }}>
@@ -443,17 +702,17 @@ function AuthScreen({ onAuth }: { onAuth: (token: string) => void }) {
           <input
             value={username} onChange={e => setUsername(e.target.value)}
             placeholder="Username" autoFocus
-            style={{ padding: '12px 14px', borderRadius: 8, border: '1px solid #333', background: '#1a1a1a', color: '#eee', fontSize: 15, outline: 'none' }}
+            style={{ padding: '12px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', background: '#16162a', color: '#eee', fontSize: 15, outline: 'none' }}
           />
           <input
             value={password} onChange={e => setPassword(e.target.value)}
             placeholder="Password" type="password"
             onKeyDown={e => e.key === 'Enter' && submit()}
-            style={{ padding: '12px 14px', borderRadius: 8, border: '1px solid #333', background: '#1a1a1a', color: '#eee', fontSize: 15, outline: 'none' }}
+            style={{ padding: '12px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', background: '#16162a', color: '#eee', fontSize: 15, outline: 'none' }}
           />
           <button onClick={submit} disabled={loading} style={{
             padding: '12px', borderRadius: 8, border: 'none',
-            background: loading ? '#444' : '#2ecc71', color: '#fff',
+            background: loading ? '#2a2a3e' : '#2ecc71', color: '#fff',
             fontWeight: 700, fontSize: 15, cursor: loading ? 'not-allowed' : 'pointer',
             opacity: loading ? 0.6 : 1, marginTop: 4,
           }}>
@@ -473,10 +732,415 @@ function AuthScreen({ onAuth }: { onAuth: (token: string) => void }) {
   )
 }
 
+function DiscordLinkScreen({ token, onLinked, onSkip }: { token: string; onLinked: () => void; onSkip: () => void }) {
+  const [code, setCode] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState(false)
+
+  const submit = async () => {
+    setError('')
+    if (!code.trim()) { setError('Enter your code'); return }
+    setLoading(true)
+    try {
+      const res = await fetch(`${WS_URL}/api/auth/discord/link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, code: code.trim().toUpperCase() }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Link failed')
+      setSuccess(true)
+      setTimeout(onLinked, 1500)
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div style={{
+      flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      padding: 24,
+    }}>
+      <div style={{
+        background: '#1a1a2e', borderRadius: 20, padding: '40px 36px',
+        border: '1px solid rgba(255,255,255,0.08)', boxShadow: '0 24px 64px rgba(0,0,0,0.5)',
+        width: '100%', maxWidth: 440, textAlign: 'center',
+      }}>
+        <div style={{ fontSize: 48, marginBottom: 16 }}>🔗</div>
+        <div style={{ fontSize: 24, fontWeight: 700, color: '#fff', marginBottom: 8 }}>Link your Discord</div>
+        <div style={{ fontSize: 14, color: '#888', lineHeight: 1.6, marginBottom: 24 }}>
+          Go to the GCPoker Discord server and run <code style={{ background: '#16162a', padding: '2px 8px', borderRadius: 4, color: '#f1c40f' }}>/link</code>
+          {' '}in any channel, then enter the 6-character code below.
+        </div>
+
+        {success ? (
+          <div style={{
+            padding: 16, background: 'rgba(46,204,113,0.1)', borderRadius: 8,
+            border: '1px solid rgba(46,204,113,0.2)',
+            color: '#2ecc71', fontSize: 15, fontWeight: 600,
+          }}>
+            ✓ Discord linked successfully!
+          </div>
+        ) : (
+          <>
+            {error && (
+              <div style={{
+                color: '#e74c3c', marginBottom: 16, padding: '8px 16px',
+                background: 'rgba(231,76,60,0.1)', borderRadius: 8, fontSize: 13,
+              }}>{error}</div>
+            )}
+            <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+              <input
+                value={code} onChange={e => setCode(e.target.value.toUpperCase().slice(0, 6))}
+                placeholder="XXXXXX" maxLength={6}
+                onKeyDown={e => e.key === 'Enter' && submit()}
+                style={{
+                  flex: 1, padding: '12px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)',
+                  background: '#16162a', color: '#eee', fontSize: 20, outline: 'none',
+                  textAlign: 'center', letterSpacing: 8, fontWeight: 700, textTransform: 'uppercase',
+                }}
+              />
+            </div>
+            <button onClick={submit} disabled={loading || code.length < 6} style={{
+              width: '100%', padding: '12px', borderRadius: 8, border: 'none',
+              background: loading ? '#2a2a3e' : '#5865F2', color: '#fff',
+              fontWeight: 700, fontSize: 15, cursor: code.length < 6 ? 'not-allowed' : 'pointer',
+              opacity: code.length < 6 ? 0.4 : 1, marginBottom: 12,
+            }}>
+              {loading ? 'Verifying...' : 'Link Discord'}
+            </button>
+            <button onClick={onSkip} style={{
+              background: 'none', border: 'none', color: '#888', cursor: 'pointer',
+              fontSize: 13, padding: 0, textDecoration: 'underline',
+            }}>
+              Skip for now — I'll link later
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function DeleteAccountScreen({ token, onDeleted, onCancel, discordTag }: { token: string; onDeleted: () => void; onCancel: () => void; discordTag?: string | null }) {
+  const [code, setCode] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState(false)
+
+  const submit = async () => {
+    setError('')
+    if (!code.trim()) { setError('Enter your code'); return }
+    setLoading(true)
+    try {
+      const res = await fetch(`${WS_URL}/api/auth/delete-account`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, code: code.trim().toUpperCase() }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Deletion failed')
+      setSuccess(true)
+      localStorage.removeItem(STORAGE_KEY)
+      setTimeout(onDeleted, 2000)
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (!discordTag) {
+    return (
+      <div style={{
+        flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 24,
+      }}>
+        <div style={{
+          background: '#1a1a2e', borderRadius: 20, padding: '40px 36px',
+          border: '1px solid rgba(255,255,255,0.08)', boxShadow: '0 24px 64px rgba(0,0,0,0.5)',
+          width: '100%', maxWidth: 440, textAlign: 'center',
+        }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>🔗</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: '#e74c3c', marginBottom: 8 }}>Discord Required</div>
+          <div style={{ fontSize: 14, color: '#888', lineHeight: 1.6, marginBottom: 24 }}>
+            You must link a Discord account before you can delete your account. This ensures only you can authorize account deletion.
+          </div>
+          <button onClick={onCancel} style={{
+            padding: '12px 24px', borderRadius: 8, border: 'none',
+            background: '#5865F2', color: '#fff',
+            fontWeight: 700, fontSize: 14, cursor: 'pointer',
+          }}>
+            Go Back
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{
+      flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      padding: 24,
+    }}>
+      <div style={{
+        background: '#1a1a2e', borderRadius: 20, padding: '40px 36px',
+        border: '1px solid rgba(255,255,255,0.08)', boxShadow: '0 24px 64px rgba(0,0,0,0.5)',
+        width: '100%', maxWidth: 440, textAlign: 'center',
+      }}>
+        <div style={{ fontSize: 48, marginBottom: 16 }}>⚠️</div>
+        <div style={{ fontSize: 24, fontWeight: 700, color: '#e74c3c', marginBottom: 8 }}>Delete Account</div>
+        <div style={{ fontSize: 14, color: '#888', lineHeight: 1.6, marginBottom: 24 }}>
+          This will permanently delete your GCPoker account and <strong style={{ color: '#e74c3c' }}>you will lose any remaining balance</strong>.
+          To confirm, run <code style={{ background: '#16162a', padding: '2px 8px', borderRadius: 4, color: '#f1c40f' }}>/confirmdeletion</code>
+          {' '}in the GCPoker Discord server and enter the code below.
+        </div>
+
+        {success ? (
+          <div style={{
+            padding: 16, background: 'rgba(231,76,60,0.1)', borderRadius: 8,
+            border: '1px solid rgba(231,76,60,0.2)',
+            color: '#e74c3c', fontSize: 15, fontWeight: 600,
+          }}>
+            ✕ Account deleted. Redirecting...
+          </div>
+        ) : (
+          <>
+            {error && (
+              <div style={{
+                color: '#e74c3c', marginBottom: 16, padding: '8px 16px',
+                background: 'rgba(231,76,60,0.1)', borderRadius: 8, fontSize: 13,
+              }}>{error}</div>
+            )}
+            <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+              <input
+                value={code} onChange={e => setCode(e.target.value.toUpperCase().slice(0, 6))}
+                placeholder="XXXXXX" maxLength={6}
+                onKeyDown={e => e.key === 'Enter' && submit()}
+                style={{
+                  flex: 1, padding: '12px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)',
+                  background: '#16162a', color: '#eee', fontSize: 20, outline: 'none',
+                  textAlign: 'center', letterSpacing: 8, fontWeight: 700, textTransform: 'uppercase',
+                }}
+              />
+            </div>
+            <button onClick={submit} disabled={loading || code.length < 6} style={{
+              width: '100%', padding: '12px', borderRadius: 8, border: 'none',
+              background: loading ? '#2a2a3e' : '#e74c3c', color: '#fff',
+              fontWeight: 700, fontSize: 15, cursor: code.length < 6 ? 'not-allowed' : 'pointer',
+              opacity: code.length < 6 ? 0.4 : 1, marginBottom: 12,
+            }}>
+              {loading ? 'Deleting...' : 'Delete My Account'}
+            </button>
+            <button onClick={onCancel} style={{
+              background: 'none', border: 'none', color: '#888', cursor: 'pointer',
+              fontSize: 13, padding: 0, textDecoration: 'underline',
+            }}>
+              Cancel — keep my account
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Seat Calibration View ───────────────────────────────
+
+type CalibrationPhase = 'seats' | 'community' | 'pot' | 'done'
+
+const PHASE_LABELS: Record<CalibrationPhase, string> = {
+  seats: 'Click each seat position (8 total)',
+  community: 'Click the center of the community card area',
+  pot: 'Click where the pot amount should display',
+  done: 'All positions saved!',
+}
+
+const PHASE_TARGETS: Record<CalibrationPhase, number> = {
+  seats: 8,
+  community: 1,
+  pot: 1,
+  done: 0,
+}
+
+interface CalibrationItem {
+  phase: CalibrationPhase
+  index?: number
+  top: string
+  left: string
+  color: string
+  label: string
+}
+
+function CalibrateSeatsView({ onDone }: { onDone: () => void }) {
+  const [phase, setPhase] = useState<CalibrationPhase>('seats')
+  const [items, setItems] = useState<CalibrationItem[]>([])
+  const tableRef = useRef<HTMLDivElement>(null)
+
+  const phaseProgress = (): string => {
+    if (phase === 'seats') return `${items.length}/8`
+    if (phase === 'community') return `Seats done (8/8)`
+    if (phase === 'pot') return `Community cards done`
+    return ''
+  }
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    if (!e.shiftKey || phase === 'done') return
+    e.preventDefault()
+    const rect = tableRef.current!.getBoundingClientRect()
+    const top = ((e.clientY - rect.top) / rect.height * 100).toFixed(2)
+    const left = ((e.clientX - rect.left) / rect.width * 100).toFixed(2)
+    const pos = { top: `${top}%`, left: `${left}%` }
+
+    if (phase === 'seats' && items.length < 8) {
+      const newItems = [...items, { phase, index: items.length, ...pos, color: '#2ecc71', label: `${items.length + 1}` }]
+      setItems(newItems)
+      if (newItems.length === 8) setPhase('community')
+    } else if (phase === 'community') {
+      const newItems = [...items, { phase, ...pos, color: '#3498db', label: 'CC' }]
+      setItems(newItems)
+      setPhase('pot')
+    } else if (phase === 'pot') {
+      const newItems = [...items, { phase, ...pos, color: '#f1c40f', label: 'Pot' }]
+      setItems(newItems)
+      setPhase('done')
+    }
+  }
+
+  // Separate effect to save when phase reaches done
+  const saveRef = useRef(false)
+  useEffect(() => {
+    if (phase === 'done' && !saveRef.current) {
+      saveRef.current = true
+      const seats = items.filter(i => i.phase === 'seats').map(i => ({ top: i.top, left: i.left }))
+      const community = items.find(i => i.phase === 'community')
+      const pot = items.find(i => i.phase === 'pot')
+      const data: CalibrationData = { seats }
+      if (community) data.communityCards = { top: community.top, left: community.left }
+      if (pot) data.pot = { top: pot.top, left: pot.left }
+      localStorage.setItem('gcpoker_seats', JSON.stringify(data))
+    }
+  }, [phase, items])
+
+  return (
+    <div style={{ width: '100vw', height: '100vh', background: '#0f0f1a', display: 'flex', flexDirection: 'column' }}>
+      {/* Top Bar — matches game style */}
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        padding: '12px 24px', background: 'rgba(0,0,0,0.35)', borderBottom: '1px solid rgba(255,255,255,0.08)',
+      }}>
+        <div style={{ display: 'flex', gap: 24, alignItems: 'center' }}>
+          <span style={{ color: '#f1c40f', fontWeight: 700, fontSize: 18 }}>Calibration</span>
+          <span style={{ color: '#3498db', fontSize: 16, fontWeight: 600 }}>{PHASE_LABELS[phase]}</span>
+          <span style={{ fontSize: 14, color: '#888' }}>{phaseProgress()}</span>
+        </div>
+      </div>
+
+      {/* Table Area — full-width image, no border */}
+      <div ref={tableRef} style={{
+        flex: 1, position: 'relative', overflow: 'hidden', cursor: 'crosshair',
+        backgroundImage: 'url(/poker-table.png)',
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        backgroundRepeat: 'no-repeat',
+      }}
+        onContextMenu={handleContextMenu}
+      >
+        {/* Marker items */}
+        {items.filter(i => i.phase === 'seats').map((pos, i) => (
+          <div key={`seat-${i}`} style={{
+            position: 'absolute', top: pos.top, left: pos.left,
+            transform: 'translate(-50%, -50%)',
+            width: 44, height: 44, borderRadius: '50%',
+            background: 'rgba(46,204,113,0.55)',
+            border: '2px solid #2ecc71',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#fff', fontWeight: 800, fontSize: 18,
+            boxShadow: '0 0 12px rgba(46,204,113,0.4)',
+            zIndex: 10,
+          }}>
+            {i + 1}
+          </div>
+        ))}
+        {items.filter(i => i.phase === 'community').map(pos => (
+          <div key="community" style={{
+            position: 'absolute', top: pos.top, left: pos.left,
+            transform: 'translate(-50%, -50%)',
+            width: 180, height: 44, borderRadius: 8,
+            background: 'rgba(52,152,219,0.45)',
+            border: '2px solid #3498db',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#fff', fontWeight: 700, fontSize: 14,
+            boxShadow: '0 0 12px rgba(52,152,219,0.4)',
+            zIndex: 10,
+          }}>
+            Community Cards
+          </div>
+        ))}
+        {items.filter(i => i.phase === 'pot').map(pos => (
+          <div key="pot" style={{
+            position: 'absolute', top: pos.top, left: pos.left,
+            transform: 'translate(-50%, -50%)',
+            padding: '8px 24px', borderRadius: 8,
+            background: 'rgba(241,196,15,0.45)',
+            border: '2px solid #f1c40f',
+            color: '#fff', fontWeight: 700, fontSize: 16,
+            boxShadow: '0 0 12px rgba(241,196,15,0.4)',
+            zIndex: 10,
+          }}>
+            Pot: $0
+          </div>
+        ))}
+      </div>
+
+      {/* Bottom Bar — matches game action bar style */}
+      <div style={{
+        padding: '10px 20px', background: 'rgba(0,0,0,0.35)', borderTop: '1px solid rgba(255,255,255,0.08)',
+        display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 12, minHeight: 72,
+      }}>
+        {phase === 'done' && (
+          <div style={{ color: '#2ecc71', fontWeight: 700, fontSize: 15 }}>
+            All positions saved
+          </div>
+        )}
+        <button onClick={() => {
+          localStorage.removeItem('gcpoker_seats')
+          setItems([])
+          setPhase('seats')
+          saveRef.current = false
+        }} style={{
+          padding: '10px 24px', borderRadius: 8, border: '1px solid #e74c3c',
+          background: 'transparent', color: '#e74c3c', cursor: 'pointer', fontWeight: 600, fontSize: 14,
+        }}>Reset</button>
+        <button onClick={() => {
+          if (phase === 'done' || items.length > 0) onDone()
+          else {
+            // Save whatever we have
+            const seats = items.filter(i => i.phase === 'seats').map(i => ({ top: i.top, left: i.left }))
+            const community = items.find(i => i.phase === 'community')
+            const pot = items.find(i => i.phase === 'pot')
+            const data: CalibrationData = { seats }
+            if (community) data.communityCards = { top: community.top, left: community.left }
+            if (pot) data.pot = { top: pot.top, left: pot.left }
+            localStorage.setItem('gcpoker_seats', JSON.stringify(data))
+            onDone()
+          }
+        }} style={{
+          padding: '10px 24px', borderRadius: 8, border: 'none',
+          background: '#2ecc71', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 14,
+        }}>Done</button>
+      </div>
+    </div>
+  )
+}
+
 // ─── Header / Profile ────────────────────────────────────
 
-function Header({ name, balance, connected, onSignOut, onDeposit, onWithdraw }: {
-  name: string; balance: number; connected: boolean; onSignOut: () => void; onDeposit?: () => void; onWithdraw?: () => void
+function Header({ name, balance, connected, onSignOut, onDeposit, onWithdraw, discordTag, onLinkDiscord, onUnlinkDiscord, onDeleteAccount }: {
+  name: string; balance: number; connected: boolean; onSignOut: () => void; onDeposit?: () => void; onWithdraw?: () => void; discordTag?: string | null; onLinkDiscord?: () => void; onUnlinkDiscord?: () => void; onDeleteAccount?: () => void
 }) {
   const [showProfile, setShowProfile] = useState(false)
   return (
@@ -509,6 +1173,10 @@ function Header({ name, balance, connected, onSignOut, onDeposit, onWithdraw }: 
               border: '1px solid rgba(255,255,255,0.1)', boxShadow: '0 12px 32px rgba(0,0,0,0.5)',
               zIndex: 50, display: 'flex', flexDirection: 'column', gap: 10,
             }}>
+              <div style={{ fontSize: 13, color: '#888' }}>{name}</div>
+              {discordTag && (
+                <div style={{ fontSize: 13, color: '#5865F2' }}>@{discordTag}</div>
+              )}
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
                 <span style={{ color: '#888' }}>Balance</span>
                 <span style={{ color: '#f1c40f', fontWeight: 700 }}>${balance.toLocaleString()}</span>
@@ -527,6 +1195,28 @@ function Header({ name, balance, connected, onSignOut, onDeposit, onWithdraw }: 
                   Withdraw
                 </button>
               </div>
+              <hr style={{ border: 'none', borderTop: '1px solid rgba(255,255,255,0.06)', margin: 0 }} />
+              {discordTag ? (
+                <button onClick={onUnlinkDiscord} style={{
+                  padding: '8px', borderRadius: 6, border: '1px solid rgba(88,101,242,0.3)',
+                  background: 'transparent', color: '#5865F2', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                }}>
+                  Unlink Discord
+                </button>
+              ) : (
+                <button onClick={onLinkDiscord} style={{
+                  padding: '8px', borderRadius: 6, border: '1px solid rgba(88,101,242,0.3)',
+                  background: 'transparent', color: '#5865F2', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                }}>
+                  Link Discord
+                </button>
+              )}
+              <button onClick={onDeleteAccount} style={{
+                padding: '8px', borderRadius: 6, border: '1px solid rgba(231,76,60,0.3)',
+                background: 'transparent', color: '#e74c3c', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+              }}>
+                Delete Account
+              </button>
               <hr style={{ border: 'none', borderTop: '1px solid rgba(255,255,255,0.06)', margin: 0 }} />
               <button onClick={onSignOut} style={{
                 padding: '8px', borderRadius: 6, border: '1px solid rgba(231,76,60,0.3)',
@@ -619,7 +1309,7 @@ function LobbyView({ tables, onJoin, onPractice, balance }: {
                 </div>
                 <button onClick={() => onJoin(t.id)} disabled={!canJoin} style={{
                   padding: '10px 22px', borderRadius: 8, border: 'none',
-                  background: canJoin ? '#2ecc71' : '#333',
+                  background: canJoin ? '#2ecc71' : '#2a2a3e',
                   color: canJoin ? '#fff' : '#666', fontWeight: 600, fontSize: 14,
                   cursor: canJoin ? 'pointer' : 'not-allowed',
                   boxShadow: canJoin ? '0 3px 10px rgba(46,204,113,0.3)' : 'none',
@@ -641,18 +1331,19 @@ function LobbyView({ tables, onJoin, onPractice, balance }: {
 
 // ─── Payout Calculation (frontend) ──────────────────────
 
-function computePayouts(playerCount: number, buyIn: number): { prizePool: number; positions: number; prizes: number[] } {
-  const totalPool = playerCount * buyIn
+function computePayouts(playerCount: number, buyIn: number, rebuyCount: number = 0): { prizePool: number; positions: number; prizes: number[] } {
+  const totalEntries = playerCount + rebuyCount
+  const totalPool = totalEntries * buyIn
   const prizePool = Math.floor(totalPool * 0.9)
   let positions = 0
-  if (playerCount <= 1) positions = 0
-  else if (playerCount <= 4) positions = 1
-  else if (playerCount <= 7) positions = 2
-  else if (playerCount <= 10) positions = 3
-  else if (playerCount <= 15) positions = 4
-  else if (playerCount <= 20) positions = 5
-  else if (playerCount <= 30) positions = 6
-  else if (playerCount <= 50) positions = 7
+  if (totalEntries <= 1) positions = 0
+  else if (totalEntries <= 4) positions = 1
+  else if (totalEntries <= 7) positions = 2
+  else if (totalEntries <= 10) positions = 3
+  else if (totalEntries <= 15) positions = 4
+  else if (totalEntries <= 20) positions = 5
+  else if (totalEntries <= 30) positions = 6
+  else if (totalEntries <= 50) positions = 7
   else positions = 9
   const weights = Array.from({ length: positions }, (_, i) => positions - i)
   const totalWeight = weights.reduce((a, b) => a + b, 0)
@@ -842,7 +1533,7 @@ function PlayerGamesView({ games, onJoin, balance, onCreateGame, userId, onCance
                     }}>i</button>
                     <button onClick={() => onJoin(g.id)} disabled={!canJoin} style={{
                       padding: '8px 18px', borderRadius: 8, border: 'none',
-                      background: canJoin ? '#2ecc71' : '#333',
+                      background: canJoin ? '#2ecc71' : '#2a2a3e',
                       color: canJoin ? '#fff' : '#666', fontWeight: 600, fontSize: 13,
                       cursor: canJoin ? 'pointer' : 'not-allowed',
                     }}>
@@ -937,22 +1628,22 @@ function CreateGameModal({ onClose, onCreate, balance }: {
       }}>
         <div style={{ fontSize: 20, fontWeight: 800, color: '#eee', marginBottom: 20 }}>Create Sit & Go Game</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <input value={name} onChange={e => setName(e.target.value)} placeholder="Game Name" style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid #333', background: '#1a1a1a', color: '#eee', fontSize: 14, outline: 'none' }} />
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="Game Name" style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', background: '#16162a', color: '#eee', fontSize: 14, outline: 'none' }} />
           <div style={{ display: 'flex', gap: 8 }}>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Max Players</div>
-              <select value={maxPlayers} onChange={e => setMaxPlayers(Number(e.target.value))} style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #333', background: '#1a1a1a', color: '#eee', fontSize: 14, outline: 'none' }}>
-                {[2,3,4,5,6,7,8,9].map(n => <option key={n} value={n}>{n}</option>)}
+              <select value={maxPlayers} onChange={e => setMaxPlayers(Number(e.target.value))} style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', background: '#16162a', color: '#eee', fontSize: 14, outline: 'none' }}>
+                {[2,3,4,5,6,7,8].map(n => <option key={n} value={n}>{n}</option>)}
               </select>
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Buy-In ($)</div>
-              <input type="number" min={1} value={buyIn} onChange={e => setBuyIn(Math.max(1, Number(e.target.value)))} style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #333', background: '#1a1a1a', color: '#eee', fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
+              <input type="number" min={1} value={buyIn} onChange={e => setBuyIn(Math.max(1, Number(e.target.value)))} style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', background: '#16162a', color: '#eee', fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
             </div>
           </div>
           <div>
             <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Starting Chips</div>
-            <input type="number" min={100} step={100} value={startingChips} onChange={e => setStartingChips(Math.max(100, Number(e.target.value)))} style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #333', background: '#1a1a1a', color: '#eee', fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
+            <input type="number" min={100} step={100} value={startingChips} onChange={e => setStartingChips(Math.max(100, Number(e.target.value)))} style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', background: '#16162a', color: '#eee', fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
           </div>
           <div style={{ fontSize: 12, color: '#888' }}>Your balance: ${balance.toLocaleString()}</div>
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
@@ -962,7 +1653,7 @@ function CreateGameModal({ onClose, onCreate, balance }: {
             }}>Cancel</button>
             <button onClick={() => onCreate(name, maxPlayers, buyIn, startingChips)} disabled={balance < buyIn || !name.trim()} style={{
               flex: 1, padding: '10px', borderRadius: 8, border: 'none',
-              background: balance >= buyIn && name.trim() ? '#2ecc71' : '#444',
+              background: balance >= buyIn && name.trim() ? '#2ecc71' : '#2a2a3e',
               color: balance >= buyIn && name.trim() ? '#fff' : '#666',
               fontWeight: 700, cursor: balance >= buyIn && name.trim() ? 'pointer' : 'not-allowed',
               fontSize: 14,
@@ -977,13 +1668,14 @@ function CreateGameModal({ onClose, onCreate, balance }: {
 // ─── Create Tournament Modal ─────────────────────────────
 
 function CreateTournamentModal({ onClose, onCreate, balance }: {
-  onClose: () => void; onCreate: (name: string, maxPlayers: number, buyIn: number, startingChips: number) => void; balance: number
+  onClose: () => void; onCreate: (name: string, maxPlayers: number, buyIn: number, startingChips: number, rebuyDuration: number) => void; balance: number
 }) {
   const [name, setName] = useState('My Tournament')
   const [maxPlayers, setMaxPlayers] = useState(18)
   const [buyIn, setBuyIn] = useState(1)
   const [startingChips, setStartingChips] = useState(1500)
-  const maxPerTable = Math.min(9, maxPlayers)
+  const [rebuyDuration, setRebuyDuration] = useState(60)
+  const maxPerTable = Math.min(8, maxPlayers)
   const numTables = Math.ceil(maxPlayers / maxPerTable)
 
   return (
@@ -998,34 +1690,38 @@ function CreateTournamentModal({ onClose, onCreate, balance }: {
       }}>
         <div style={{ fontSize: 20, fontWeight: 800, color: '#eee', marginBottom: 20 }}>Create Tournament</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <input value={name} onChange={e => setName(e.target.value)} placeholder="Tournament Name" style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid #333', background: '#1a1a1a', color: '#eee', fontSize: 14, outline: 'none' }} />
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="Tournament Name" style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', background: '#16162a', color: '#eee', fontSize: 14, outline: 'none' }} />
           <div style={{ display: 'flex', gap: 8 }}>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Max Players</div>
-              <input type="number" min={2} max={1000} value={maxPlayers} onChange={e => setMaxPlayers(Math.max(2, Math.min(1000, Number(e.target.value))))} style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #333', background: '#1a1a1a', color: '#eee', fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
+              <input type="number" min={2} max={1000} value={maxPlayers} onChange={e => setMaxPlayers(Math.max(2, Math.min(1000, Number(e.target.value))))} style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', background: '#16162a', color: '#eee', fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Buy-In (GC)</div>
-              <input type="number" min={1} value={buyIn} onChange={e => setBuyIn(Math.max(1, Number(e.target.value)))} style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #333', background: '#1a1a1a', color: '#eee', fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
+              <input type="number" min={1} value={buyIn} onChange={e => setBuyIn(Math.max(1, Number(e.target.value)))} style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', background: '#16162a', color: '#eee', fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Starting Chips</div>
-              <input type="number" min={100} step={100} value={startingChips} onChange={e => setStartingChips(Math.max(100, Number(e.target.value)))} style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #333', background: '#1a1a1a', color: '#eee', fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
+              <input type="number" min={100} step={100} value={startingChips} onChange={e => setStartingChips(Math.max(100, Number(e.target.value)))} style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', background: '#16162a', color: '#eee', fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Rebuy Window (min)</div>
+              <input type="number" min={0} value={rebuyDuration} onChange={e => setRebuyDuration(Math.max(0, Number(e.target.value)))} style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', background: '#16162a', color: '#eee', fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
             </div>
           </div>
           <div style={{ fontSize: 12, color: '#888' }}>
-            {numTables > 1 ? `${numTables} tables of ${maxPerTable}` : '1 table'} &middot; Your balance: ${balance.toLocaleString()}
+            {numTables > 1 ? `${numTables} tables of ${maxPerTable}` : '1 table'} &middot; Your balance: ${balance.toLocaleString()} &middot; {rebuyDuration > 0 ? `${rebuyDuration}min rebuy window` : 'No rebuys'}
           </div>
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
             <button onClick={onClose} style={{
               flex: 1, padding: '10px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)',
               background: 'transparent', color: '#888', cursor: 'pointer', fontSize: 14,
             }}>Cancel</button>
-            <button onClick={() => onCreate(name, maxPlayers, buyIn, startingChips)} disabled={balance < buyIn || !name.trim()} style={{
+            <button onClick={() => onCreate(name, maxPlayers, buyIn, startingChips, rebuyDuration)} disabled={balance < buyIn || !name.trim()} style={{
               flex: 1, padding: '10px', borderRadius: 8, border: 'none',
-              background: balance >= buyIn && name.trim() ? '#e67e22' : '#444',
+              background: balance >= buyIn && name.trim() ? '#e67e22' : '#2a2a3e',
               color: balance >= buyIn && name.trim() ? '#fff' : '#666',
               fontWeight: 700, cursor: balance >= buyIn && name.trim() ? 'pointer' : 'not-allowed',
               fontSize: 14,
@@ -1039,8 +1735,8 @@ function CreateTournamentModal({ onClose, onCreate, balance }: {
 
 // ─── Tournament Lobby ────────────────────────────────────
 
-function TournamentLobbyView({ tournaments, onRegister, balance, onCreateTournament, onCancel, userId }: {
-  tournaments: TournamentSummary[]; onRegister: (id: string) => void; balance: number; onCreateTournament?: () => void; onCancel?: (id: string) => void; userId?: string
+function TournamentLobbyView({ tournaments, onRegister, onRebuy, balance, onCreateTournament, onCancel, userId }: {
+  tournaments: TournamentSummary[]; onRegister: (id: string) => void; onRebuy?: (id: string) => void; balance: number; onCreateTournament?: () => void; onCancel?: (id: string) => void; userId?: string
 }) {
   const statusLabel = ['Registering', 'Running', 'Completed']
   const userTourneys = tournaments.filter(t => t.creatorName)
@@ -1092,22 +1788,31 @@ function TournamentLobbyView({ tournaments, onRegister, balance, onCreateTournam
                     background: 'transparent', color: '#888', cursor: 'pointer', fontSize: 12, fontWeight: 700,
                   }}>i</button>
                   <button onClick={() => onRegister(t.id)} disabled={!canRegister} style={{
-                    padding: '10px 22px', borderRadius: 8, border: 'none',
-                    background: canRegister ? '#e67e22' : '#333',
-                    color: canRegister ? '#fff' : '#666', fontWeight: 600, fontSize: 14,
-                    cursor: canRegister ? 'pointer' : 'not-allowed',
-                    boxShadow: canRegister ? '0 3px 10px rgba(230,126,34,0.3)' : 'none',
-                  }}>
-                    {t.status === 0 ? 'Register' : t.status === 1 ? 'Running' : 'Completed'}
-                  </button>
+                      padding: '10px 22px', borderRadius: 8, border: 'none',
+                      background: canRegister ? '#e67e22' : '#2a2a3e',
+                      color: canRegister ? '#fff' : '#666', fontWeight: 600, fontSize: 14,
+                      cursor: canRegister ? 'pointer' : 'not-allowed',
+                      boxShadow: canRegister ? '0 3px 10px rgba(230,126,34,0.3)' : 'none',
+                    }}>
+                      {t.status === 0 ? 'Register' : t.status === 1 ? 'Running' : 'Completed'}
+                    </button>
+                    {t.status === 1 && onRebuy && (
+                      <button onClick={() => onRebuy(t.id)} title="Rebuy for buy-in cost" style={{
+                        padding: '10px 22px', borderRadius: 8, border: '1px solid #2ecc71',
+                        background: 'transparent', color: '#2ecc71', fontWeight: 600, fontSize: 14,
+                        cursor: 'pointer', boxShadow: '0 3px 10px rgba(46,204,113,0.2)',
+                      }}>
+                        Rebuy (${t.buyIn})
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            )
-          })}
+              )
+            })}
+          </div>
         </div>
-      </div>
 
-      {/* Player-Created Tournaments */}
+        {/* Player-Created Tournaments */}
       {userTourneys.length > 0 && (
         <div>
           <div style={{ fontSize: 13, fontWeight: 700, color: '#888', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>Player Tournaments</div>
@@ -1140,12 +1845,21 @@ function TournamentLobbyView({ tournaments, onRegister, balance, onCreateTournam
                     }}>i</button>
                     <button onClick={() => onRegister(t.id)} disabled={!canRegister} style={{
                       padding: '8px 18px', borderRadius: 8, border: 'none',
-                      background: canRegister ? '#e67e22' : '#333',
+                      background: canRegister ? '#e67e22' : '#2a2a3e',
                       color: canRegister ? '#fff' : '#666', fontWeight: 600, fontSize: 13,
                       cursor: canRegister ? 'pointer' : 'not-allowed',
                     }}>
                       {t.status === 0 ? 'Register' : t.status === 1 ? 'Running' : 'Completed'}
                     </button>
+                    {t.status === 1 && onRebuy && (
+                      <button onClick={() => onRebuy(t.id)} title="Rebuy for buy-in cost" style={{
+                        padding: '8px 18px', borderRadius: 8, border: '1px solid #2ecc71',
+                        background: 'transparent', color: '#2ecc71', fontWeight: 600, fontSize: 13,
+                        cursor: 'pointer',
+                      }}>
+                        Rebuy (${t.buyIn})
+                      </button>
+                    )}
                     {isCreator && t.status === 0 && onCancel && (
                       <button onClick={() => onCancel(t.id)} title="Cancel tournament" style={{
                         padding: '8px 14px', borderRadius: 6, border: '1px solid #e74c3c',
@@ -1424,11 +2138,11 @@ function CashierModal({ mode, userId, token, balance, onDone }: {
               <input
                 value={gcCode} onChange={e => setGcCode(e.target.value)}
                 placeholder="Enter GC code"
-                style={{ padding: '12px 14px', borderRadius: 8, border: '1px solid #333', background: '#1a1a1a', color: '#eee', fontSize: 15, outline: 'none' }}
+                style={{ padding: '12px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', background: '#16162a', color: '#eee', fontSize: 15, outline: 'none' }}
               />
               <button onClick={submit} disabled={loading || !gcCode.trim()} style={{
                 padding: '12px', borderRadius: 8, border: 'none',
-                background: loading || !gcCode.trim() ? '#444' : '#2ecc71', color: '#fff',
+                background: loading || !gcCode.trim() ? '#2a2a3e' : '#2ecc71', color: '#fff',
                 fontWeight: 700, fontSize: 15, cursor: loading || !gcCode.trim() ? 'not-allowed' : 'pointer',
               }}>
                 {loading ? 'Submitting...' : 'Redeem Code'}
@@ -1440,11 +2154,11 @@ function CashierModal({ mode, userId, token, balance, onDone }: {
                 type="number" min={1} value={amount || ''}
                 onChange={e => setAmount(Math.max(1, Math.min(Number(e.target.value), balance)))}
                 placeholder="Amount"
-                style={{ padding: '12px 14px', borderRadius: 8, border: '1px solid #333', background: '#1a1a1a', color: '#eee', fontSize: 15, outline: 'none' }}
+                style={{ padding: '12px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', background: '#16162a', color: '#eee', fontSize: 15, outline: 'none' }}
               />
               <button onClick={submit} disabled={loading || amount <= 0 || amount > balance} style={{
                 padding: '12px', borderRadius: 8, border: 'none',
-                background: loading || amount <= 0 || amount > balance ? '#444' : '#e67e22', color: '#fff',
+                background: loading || amount <= 0 || amount > balance ? '#2a2a3e' : '#e67e22', color: '#fff',
                 fontWeight: 700, fontSize: 15, cursor: loading || amount <= 0 || amount > balance ? 'not-allowed' : 'pointer',
               }}>
                 {loading ? 'Processing...' : `Withdraw $${amount}`}
@@ -1827,7 +2541,7 @@ function HandReplayer({ hand, onBack }: {
 
 // ─── Stats Panel (full lobby view) ────────────────────────
 
-function StatsPanel({ stats, hands }: { stats: PlayerStatsInfo | null; hands: HandSummary[] }) {
+function StatsPanel({ stats, hands, playerName }: { stats: PlayerStatsInfo | null; hands: HandSummary[]; playerName: string }) {
   if (!stats || stats.totalHands === 0) {
     return (
       <div style={{ maxWidth: 500, margin: '0 auto', textAlign: 'center', padding: 60, color: '#888' }}>
@@ -1886,8 +2600,8 @@ function StatsPanel({ stats, hands }: { stats: PlayerStatsInfo | null; hands: Ha
       <div>
         <div style={{ fontSize: 14, fontWeight: 700, color: '#888', marginBottom: 8 }}>Recent Results</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          {hands.slice(0, 20).map(h => {
-            const won = h.winnerName === hands[0]?.playerNames.find(() => true)
+          {hands.filter(h => h.playerNames.includes(playerName)).slice(0, 20).map(h => {
+            const won = h.winnerName === playerName
             return (
               <div key={h.handId} style={{
                 display: 'flex', justifyContent: 'space-between', padding: '6px 12px',
@@ -1915,6 +2629,7 @@ export default function Home() {
   const [sessionLoaded, setSessionLoaded] = useState(false)
   const [userId, setUserId] = useState('')
   const [userName, setUserName] = useState('')
+  const [discordTag, setDiscordTag] = useState<string | null>(null)
   const [tables, setTables] = useState<TableConfig[]>([])
   const [tournaments, setTournaments] = useState<TournamentSummary[]>([])
   const [playerGames, setPlayerGames] = useState<PlayerGameSummary[]>([])
@@ -1929,6 +2644,10 @@ export default function Home() {
   const [cashierMode, setCashierMode] = useState<'deposit' | 'withdraw' | null>(null)
   const [showCreateGame, setShowCreateGame] = useState(false)
   const [showCreateTournament, setShowCreateTournament] = useState(false)
+  const [showDiscordLink, setShowDiscordLink] = useState(false)
+  const [showDeleteAccount, setShowDeleteAccount] = useState(false)
+  const [pendingToken, setPendingToken] = useState<string | null>(null)
+  const [showCalibration, setShowCalibration] = useState(false)
 
   // Restore session on mount
   useEffect(() => {
@@ -1944,6 +2663,7 @@ export default function Home() {
           setUserId(data.user.id)
           setUserName(data.user.name)
           setBalance(data.user.balance)
+          setDiscordTag(data.user.discordTag ?? null)
         } else {
           localStorage.removeItem(STORAGE_KEY)
         }
@@ -1962,6 +2682,7 @@ export default function Home() {
     s.on('connect', async () => {
       setConnected(true)
       if (token) {
+        setHandsLoading(true)
         try {
           const [lobby, tourneys, session, handsData, pGames] = await Promise.all([
             fetch(`${WS_URL}/api/lobby`).then(r => r.json()),
@@ -1981,9 +2702,11 @@ export default function Home() {
             setUserId(session.user.id)
             setBalance(session.user.balance)
             setUserName(session.user.name)
+            setDiscordTag(session.user.discordTag ?? null)
           }
           setHands(handsData)
         } catch { /* silent */ }
+        setHandsLoading(false)
       } else {
         try {
           const [lobby, tourneys] = await Promise.all([
@@ -2037,10 +2760,16 @@ export default function Home() {
           setUserId(data.user.id)
           setUserName(data.user.name)
           setBalance(data.user.balance)
+          setDiscordTag(data.user.discordTag ?? null)
         }
       }).catch(() => {})
     }
   }, [socket])
+
+  const handleSignup = useCallback((newToken: string) => {
+    setPendingToken(newToken)
+    setShowDiscordLink(true)
+  }, [])
 
   const refreshBalance = useCallback(async () => {
     if (!token) return
@@ -2061,6 +2790,60 @@ export default function Home() {
     setUserId('')
     setUserName('')
     setBalance(0)
+    setDiscordTag(null)
+  }, [])
+
+  const handleLinkDiscord = useCallback(() => {
+    setShowDiscordLink(true)
+    setPendingToken(token)
+  }, [token])
+
+  const handleUnlinkDiscord = useCallback(async () => {
+    if (!token) return
+    try {
+      const res = await fetch(`${WS_URL}/api/auth/discord/unlink`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      })
+      const data = await res.json()
+      if (!data.success) throw new Error('Failed to unlink')
+      setDiscordTag(null)
+      refreshBalance()
+    } catch (err: any) {
+      setError(err.message)
+    }
+  }, [token, refreshBalance])
+
+  const handleDiscordLinked = useCallback(() => {
+    if (pendingToken) {
+      localStorage.setItem(STORAGE_KEY, pendingToken)
+      handleAuth(pendingToken)
+    }
+    setShowDiscordLink(false)
+    setPendingToken(null)
+  }, [pendingToken, handleAuth])
+
+  const handleDiscordSkip = useCallback(() => {
+    if (pendingToken) {
+      localStorage.setItem(STORAGE_KEY, pendingToken)
+      handleAuth(pendingToken)
+    }
+    setShowDiscordLink(false)
+    setPendingToken(null)
+  }, [pendingToken, handleAuth])
+
+  const handleDeleteAccount = useCallback(() => {
+    setShowDeleteAccount(true)
+  }, [])
+
+  const handleAccountDeleted = useCallback(() => {
+    setShowDeleteAccount(false)
+    signOut()
+  }, [signOut])
+
+  const handleDeleteCancel = useCallback(() => {
+    setShowDeleteAccount(false)
   }, [])
 
   const joinTable = useCallback((tableId: string) => {
@@ -2080,15 +2863,25 @@ export default function Home() {
     })
   }, [socket, userName])
 
+  const refreshHands = useCallback(async () => {
+    setHandsLoading(true)
+    try {
+      const data = await fetch(`${WS_URL}/api/hands`).then(r => r.json())
+      setHands(data)
+    } catch {}
+    setHandsLoading(false)
+  }, [])
+
   const leaveTable = useCallback(() => {
     socket?.emit(ClientEvent.LeaveTable)
     setGameState(null)
     setPendingGameId(null)
     refreshBalance()
+    refreshHands()
     // Refresh games/tournaments
     fetch(`${WS_URL}/api/games`).then(r => r.json()).then(setPlayerGames).catch(() => {})
     fetch(`${WS_URL}/api/tournaments`).then(r => r.json()).then(setTournaments).catch(() => {})
-  }, [socket])
+  }, [socket, refreshHands])
 
   const registerTournament = useCallback(async (id: string) => {
     if (!token) { setError('Not authenticated'); return }
@@ -2101,6 +2894,32 @@ export default function Home() {
       })
       const data = await res.json()
       if (!data.ok) throw new Error(data.error ?? 'Registration failed')
+      const [list, session] = await Promise.all([
+        fetch(`${WS_URL}/api/tournaments`).then(r => r.json()),
+        fetch(`${WS_URL}/api/auth/session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        }).then(r => r.json()),
+      ])
+      setTournaments(list)
+      if (session.user) setBalance(session.user.balance)
+    } catch (err: any) {
+      setError(err.message)
+    }
+  }, [token])
+
+  const rebuyTournament = useCallback(async (id: string) => {
+    if (!token) { setError('Not authenticated'); return }
+    setError('')
+    try {
+      const res = await fetch(`${WS_URL}/api/tournaments/${id}/rebuy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      })
+      const data = await res.json()
+      if (!data.success) throw new Error(data.error ?? 'Rebuy failed')
       const [list, session] = await Promise.all([
         fetch(`${WS_URL}/api/tournaments`).then(r => r.json()),
         fetch(`${WS_URL}/api/auth/session`, {
@@ -2142,14 +2961,14 @@ export default function Home() {
 
   // ─── Create Tournament ─────────────────────────────────────
 
-  const createTournamentFn = useCallback(async (name: string, maxPlayers: number, buyIn: number, startingChips: number) => {
+  const createTournamentFn = useCallback(async (name: string, maxPlayers: number, buyIn: number, startingChips: number, rebuyDuration: number = 60) => {
     if (!token) { setError('Not authenticated'); return }
     setError('')
     try {
       const res = await fetch(`${WS_URL}/api/tournaments/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, maxPlayers, buyIn, startingChips, token }),
+        body: JSON.stringify({ name, maxPlayers, buyIn, startingChips, token, rebuyDuration }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to create tournament')
@@ -2232,26 +3051,48 @@ export default function Home() {
 
   if (!sessionLoaded) {
     return (
-      <div style={{ width: '100vw', height: '100vh', background: '#0a0a0a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ width: '100vw', height: '100vh', background: '#0f0f1a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ color: '#888', fontSize: 15 }}>Loading...</div>
       </div>
     )
   }
 
+  if (showDiscordLink && pendingToken) {
+    return (
+      <div style={{ width: '100vw', height: '100vh', background: '#0f0f1a', display: 'flex', flexDirection: 'column' }}>
+        <DiscordLinkScreen token={pendingToken} onLinked={handleDiscordLinked} onSkip={handleDiscordSkip} />
+      </div>
+    )
+  }
+
+  if (showDeleteAccount && token) {
+    return (
+      <div style={{ width: '100vw', height: '100vh', background: '#0f0f1a', display: 'flex', flexDirection: 'column' }}>
+        <DeleteAccountScreen token={token} onDeleted={handleAccountDeleted} onCancel={handleDeleteCancel} discordTag={discordTag} />
+      </div>
+    )
+  }
+
+  if (showCalibration) {
+    return (
+      <CalibrateSeatsView onDone={() => setShowCalibration(false)} />
+    )
+  }
+
   if (!token) {
     return (
-      <div style={{ width: '100vw', height: '100vh', background: '#0a0a0a', display: 'flex', flexDirection: 'column' }}>
-        <AuthScreen onAuth={handleAuth} />
+      <div style={{ width: '100vw', height: '100vh', background: '#0f0f1a', display: 'flex', flexDirection: 'column' }}>
+        <AuthScreen onAuth={handleAuth} onSignup={handleSignup} />
       </div>
     )
   }
 
   return (
-    <div style={{ width: '100vw', height: '100vh', background: '#0a0a0a', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ width: '100vw', height: '100vh', background: '#0f0f1a', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
       {!gameState ? (
         <div style={{ flex: 1, overflow: 'auto' }}>
           <div style={{ padding: '24px 32px' }}>
-            <Header name={userName} balance={balance} connected={connected} onSignOut={signOut} onDeposit={() => setCashierMode('deposit')} onWithdraw={() => setCashierMode('withdraw')} />
+            <Header name={userName} balance={balance} connected={connected} onSignOut={signOut} onDeposit={() => setCashierMode('deposit')} onWithdraw={() => setCashierMode('withdraw')} discordTag={discordTag} onLinkDiscord={handleLinkDiscord} onUnlinkDiscord={handleUnlinkDiscord} onDeleteAccount={handleDeleteAccount} />
 
             {error && (
               <div style={{
@@ -2276,31 +3117,47 @@ export default function Home() {
 
             {connected && (
               <>
-                <div style={{ display: 'flex', gap: 4, marginBottom: 20 }}>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 20 }}>
                   <button onClick={() => setTab('cash')} style={{
-                    padding: '10px 24px', borderRadius: '8px 8px 0 0', border: 'none',
+                    padding: '10px 24px', borderRadius: 9999, border: 'none',
                     background: tab === 'cash' ? 'rgba(46,204,113,0.15)' : 'rgba(255,255,255,0.04)',
                     color: tab === 'cash' ? '#2ecc71' : '#888', fontWeight: 700, cursor: 'pointer', fontSize: 14,
                     borderBottom: tab === 'cash' ? '2px solid #2ecc71' : '2px solid transparent',
-                  }}>Cash Games</button>
+                    transition: 'all 0.15s',
+                  }}
+                    onMouseEnter={e => { if (tab !== 'cash') e.currentTarget.style.background = 'rgba(255,255,255,0.08)' }}
+                    onMouseLeave={e => { if (tab !== 'cash') e.currentTarget.style.background = 'rgba(255,255,255,0.04)' }}
+                  >Cash Games</button>
                   <button onClick={() => setTab('tournaments')} style={{
-                    padding: '10px 24px', borderRadius: '8px 8px 0 0', border: 'none',
+                    padding: '10px 24px', borderRadius: 9999, border: 'none',
                     background: tab === 'tournaments' ? 'rgba(230,126,34,0.15)' : 'rgba(255,255,255,0.04)',
                     color: tab === 'tournaments' ? '#e67e22' : '#888', fontWeight: 700, cursor: 'pointer', fontSize: 14,
                     borderBottom: tab === 'tournaments' ? '2px solid #e67e22' : '2px solid transparent',
-                  }}>Tournaments</button>
+                    transition: 'all 0.15s',
+                  }}
+                    onMouseEnter={e => { if (tab !== 'tournaments') e.currentTarget.style.background = 'rgba(255,255,255,0.08)' }}
+                    onMouseLeave={e => { if (tab !== 'tournaments') e.currentTarget.style.background = 'rgba(255,255,255,0.04)' }}
+                  >Tournaments</button>
                   <button onClick={() => setTab('hands')} style={{
-                    padding: '10px 24px', borderRadius: '8px 8px 0 0', border: 'none',
+                    padding: '10px 24px', borderRadius: 9999, border: 'none',
                     background: tab === 'hands' ? 'rgba(52,152,219,0.15)' : 'rgba(255,255,255,0.04)',
                     color: tab === 'hands' ? '#3498db' : '#888', fontWeight: 700, cursor: 'pointer', fontSize: 14,
                     borderBottom: tab === 'hands' ? '2px solid #3498db' : '2px solid transparent',
-                  }}><span style={{ fontSize: 11 }}>&#9776;</span> Hands</button>
+                    transition: 'all 0.15s',
+                  }}
+                    onMouseEnter={e => { if (tab !== 'hands') e.currentTarget.style.background = 'rgba(255,255,255,0.08)' }}
+                    onMouseLeave={e => { if (tab !== 'hands') e.currentTarget.style.background = 'rgba(255,255,255,0.04)' }}
+                  >Hands</button>
                   <button onClick={() => setTab('stats')} style={{
-                    padding: '10px 24px', borderRadius: '8px 8px 0 0', border: 'none',
+                    padding: '10px 24px', borderRadius: 9999, border: 'none',
                     background: tab === 'stats' ? 'rgba(155,89,182,0.15)' : 'rgba(255,255,255,0.04)',
                     color: tab === 'stats' ? '#bb86fc' : '#888', fontWeight: 700, cursor: 'pointer', fontSize: 14,
                     borderBottom: tab === 'stats' ? '2px solid #bb86fc' : '2px solid transparent',
-                  }}>Stats</button>
+                    transition: 'all 0.15s',
+                  }}
+                    onMouseEnter={e => { if (tab !== 'stats') e.currentTarget.style.background = 'rgba(255,255,255,0.08)' }}
+                    onMouseLeave={e => { if (tab !== 'stats') e.currentTarget.style.background = 'rgba(255,255,255,0.04)' }}
+                  >Stats</button>
                 </div>
                 {tab === 'cash' ? (
                   <>
@@ -2309,7 +3166,7 @@ export default function Home() {
                   </>
                 ) : tab === 'tournaments' ? (
                   <>
-                    <TournamentLobbyView tournaments={tournaments} onRegister={registerTournament} balance={balance} onCreateTournament={() => setShowCreateTournament(true)} />
+                    <TournamentLobbyView tournaments={tournaments} onRegister={registerTournament} onRebuy={rebuyTournament} balance={balance} onCreateTournament={() => setShowCreateTournament(true)} onCancel={cancelTournament} userId={userId} />
                   </>
                 ) : tab === 'hands' ? (
                   selectedHand ? (
@@ -2318,14 +3175,22 @@ export default function Home() {
                     <HandHistoryPanel hands={hands} onSelectHand={setSelectedHand} playerName={userName} loading={handsLoading} />
                   )
                 ) : (
-                  <StatsPanel stats={computeStats(hands, userName)} hands={hands} />
+                  <StatsPanel stats={computeStats(hands, userName)} hands={hands} playerName={userName} />
+                )}
+                {process.env.NODE_ENV === 'development' && (
+                  <div style={{ textAlign: 'center', marginTop: 32, paddingBottom: 16 }}>
+                    <button onClick={() => setShowCalibration(true)} style={{
+                      background: 'none', border: 'none', color: '#555', cursor: 'pointer',
+                      fontSize: 12, padding: 0, textDecoration: 'underline',
+                    }}>Calibrate Seats</button>
+                  </div>
                 )}
               </>
             )}
           </div>
         </div>
       ) : (
-        <TableView gameState={gameState} socket={socket!} myId={socket!.id!} onLeave={leaveTable} hands={hands} />
+        <TableView gameState={gameState} socket={socket!} myId={socket!.id!} onLeave={leaveTable} />
       )}
 
       {/* Pending Game Waiting Screen */}

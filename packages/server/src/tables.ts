@@ -42,6 +42,7 @@ export class TableManager {
     const engine = new GameEngine({
       smallBlind: opts.smallBlind,
       bigBlind: opts.bigBlind,
+      tableId: id,
     })
 
     this.tables.set(id, engine)
@@ -121,13 +122,13 @@ export class TableManager {
   createPracticeTable(): { tableId: string; engine: GameEngine } {
     this.practiceCount++
     const tableId = `practice-${this.practiceCount}`
-    const engine = new GameEngine({ smallBlind: 5, bigBlind: 10 })
+    const engine = new GameEngine({ smallBlind: 5, bigBlind: 10, tableId })
 
     this.tables.set(tableId, engine)
     this.tableConfigs.set(tableId, {
       id: tableId,
       name: `Practice #${this.practiceCount}`,
-      maxPlayers: 6,
+      maxPlayers: 8,
       minPlayers: 2,
       smallBlind: 5,
       bigBlind: 10,

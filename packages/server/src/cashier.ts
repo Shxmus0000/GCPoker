@@ -6,6 +6,7 @@ import {
 import { v4 as uuid } from 'uuid'
 import { readJSON, writeJSON } from './db'
 import { creditBalance, getUser } from './users'
+import { emitServerEvent } from './events'
 
 // ─── Data Files ─────────────────────────────────────────
 
@@ -219,10 +220,12 @@ cashierRouter.post('/queue/result', (req, res) => {
         if (amountMatch) {
           tx.amount = parseInt(amountMatch[1], 10)
           creditBalance(tx.userId, tx.amount)
+          emitServerEvent('cashier:deposit:complete', tx.userId, tx.amount, tx.id)
         }
       } else if (job.type === TransactionType.Withdrawal) {
         // message contains the GC code
         tx.gcCode = message
+        emitServerEvent('cashier:withdraw:complete', tx.userId, tx.amount, tx.gcCode, tx.id)
       }
     } else {
       tx.status = TransactionStatus.Failed

@@ -1,3 +1,25 @@
+import { resolve } from 'path'
+import { readFileSync, existsSync } from 'fs'
+
+const envPath = resolve(__dirname, '..', '.env')
+if (existsSync(envPath)) {
+  const lines = readFileSync(envPath, 'utf-8').split('\n')
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const eq = trimmed.indexOf('=')
+    if (eq === -1) continue
+    const key = trimmed.slice(0, eq).trim()
+    let value = trimmed.slice(eq + 1).trim()
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1)
+    }
+    if (!process.env[key]) {
+      process.env[key] = value
+    }
+  }
+}
+
 import express from 'express'
 import { createServer } from 'http'
 import { Server } from 'socket.io'
@@ -7,13 +29,15 @@ import {
   HandRank, HAND_RANK_NAMES, ChatMessage,
 } from '@gcpoker/shared'
 import { TableManager } from './tables'
-import { debitBalance, creditBalance, getUser, getSessionUser } from './users'
+import { debitBalance, creditBalance, getUser, getSessionUser, getAllDiscordIds } from './users'
 import { authRouter } from './auth'
 import { cashierRouter } from './cashier'
 import { tournamentRouter, getTournamentEngineByTableId, getAllTournaments } from './tournaments'
 import { gameRouter, getGameEngine, getGame, processGameAction, getJoinableGames, setOnGameStartCallback } from './games'
-import { aiDecide, isAI, evaluateHand, getHand, getRecentHands, getAllHands } from '@gcpoker/engine'
+import { aiDecide, isAI, evaluateHand, getHand, getRecentHands, getAllHands, setOnHandRecorded } from '@gcpoker/engine'
 import type { HandRecord } from '@gcpoker/engine'
+import serverEvents, { emitServerEvent, onServerEvent } from './events'
+import { createDiscordBot } from '@gcpoker/discord'
 
 const app = express()
 const httpServer = createServer(app)
@@ -250,6 +274,11 @@ io.on('connection', (socket) => {
           }, 5000)
           return
         }
+
+        if (state.phase === GamePhase.Complete) {
+          setTimeout(() => continueToNextHand(roomId, 'game'), 10000)
+          return
+        }
       } else if (tTableId) {
         // Tournament table
         const tEng = getTournamentEngineByTableId(tTableId)
@@ -269,6 +298,8 @@ io.on('connection', (socket) => {
             })
             return
           }
+          setTimeout(() => continueToNextHand(roomId, 'tournament'), 10000)
+          return
         }
       } else {
         // Cash table
@@ -277,44 +308,22 @@ io.on('connection', (socket) => {
         engine.processAction(action)
         state = engine.getState()
         io.to(roomId).emit(ServerEvent.GameState, state)
-      }
 
-      if (state.phase === GamePhase.Complete) {
-        setTimeout(() => {
-          if (tableId) {
-            const eng = tables.getTable(tableId)
-            if (eng) {
-              eng.startHand()
-              io.to(roomId).emit(ServerEvent.GameState, eng.getState())
-              if (tables.isPracticeTable(tableId)) scheduleAIActions(tableId)
-              notifyTurn(socket, roomId)
-            }
-          } else if (gameId) {
-            const eng = getGameEngine(gameId)
-            if (eng) {
-              eng.startHand()
-              io.to(roomId).emit(ServerEvent.GameState, eng.getState())
-              notifyTurn(socket, roomId)
-            }
-          } else if (tTableId) {
-            const tEng = getTournamentEngineByTableId(tTableId)
-            const eng = tEng?.getTable(tTableId)
-            if (eng && tEng && tEng.getState().status === 1) { // Running
-              eng.startHand()
-              io.to(roomId).emit(ServerEvent.GameState, eng.getState())
-              notifyTurn(socket, roomId)
-            }
+        if (state.phase === GamePhase.Complete) {
+          if (tables.isPracticeTable(tableId!)) {
+            setPendingContinue(roomId, 'cash')
+          } else {
+            setTimeout(() => continueToNextHand(roomId, 'cash'), 10000)
           }
-        }, 2000)
+          return
+        }
       }
 
       if (tableId && tables.isPracticeTable(tableId)) {
         scheduleAIActions(tableId)
       }
 
-      if (state.phase !== GamePhase.Complete) {
-        notifyTurn(socket, roomId)
-      }
+      notifyTurn(socket, roomId)
     } catch (err: any) {
       socket.emit(ServerEvent.Error, { message: err.message })
     }
@@ -345,6 +354,21 @@ io.on('connection', (socket) => {
     io.to(room).emit(ServerEvent.GameState, engine.getState())
   })
 
+  // ── Continue (dismiss showdown overlay, start next hand) ──
+
+  socket.on(ClientEvent.Continue, () => {
+    const tableId = socketTable.get(socket.id)
+    const gameId = socketGame.get(socket.id)
+    const tTableId = socketTTable.get(socket.id)
+    const roomId = tableId || gameId || tTableId
+    if (!roomId) return
+
+    const pending = pendingContinue.get(roomId)
+    if (!pending) return
+    clearTimeout(pending.timer)
+    continueToNextHand(roomId, pending.type)
+  })
+
   // ── Chat ──
 
   socket.on(ClientEvent.Chat, (data: { text: string }) => {
@@ -356,17 +380,19 @@ io.on('connection', (socket) => {
     if (!engine) return
 
     const state = engine.getState()
-    const player = state.players.find(p => p.id === socket.id)
+    const userId = socketUser.get(socket.id)
+    const player = state.players.find(p => p.id === userId || p.id === socket.id)
     if (!player) return
 
     const msg: ChatMessage = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      playerId: socket.id,
+      playerId: userId || socket.id,
       playerName: player.name,
       text: data.text.slice(0, 200),
       timestamp: Date.now(),
     }
     io.to(roomId).emit(ServerEvent.Chat, msg)
+    emitServerEvent('chat:message', roomId, msg)
   })
 
   socket.on('disconnect', () => {
@@ -384,6 +410,9 @@ io.on('connection', (socket) => {
 // ─── AI Action Scheduler ─────────────────────────────────
 
 const AI_DELAY = 800
+
+// Pending Continue events per room — waits for a player to click Continue before starting next hand
+const pendingContinue = new Map<string, { timer: NodeJS.Timeout; type: 'cash' | 'game' | 'tournament' }>()
 
 function scheduleAIActions(tableId: string): void {
   const engine = tables.getTable(tableId)
@@ -420,15 +449,9 @@ function scheduleAIActions(tableId: string): void {
       io.to(tableId).emit(ServerEvent.GameState, newState)
 
       if (newState.phase === GamePhase.Complete) {
-        setTimeout(() => {
-          const e = tables.getTable(tableId)
-          if (e) {
-            e.startHand()
-            const ns = e.getState()
-            io.to(tableId).emit(ServerEvent.GameState, ns)
-            scheduleAIActions(tableId)
-          }
-        }, 2000)
+        // Wait for Continue from the human player
+        setPendingContinue(tableId, 'cash')
+        return
       } else {
         scheduleAIActions(tableId)
       }
@@ -509,6 +532,55 @@ function notifyTurn(socket: any, roomId: string): void {
   }
 }
 
+function setPendingContinue(roomId: string, type: 'cash' | 'game' | 'tournament'): void {
+  // Clear any existing pending
+  const existing = pendingContinue.get(roomId)
+  if (existing) clearTimeout(existing.timer)
+
+  const timer = setTimeout(() => {
+    pendingContinue.delete(roomId)
+    continueToNextHand(roomId, type)
+  }, 30000) // fallback: auto-continue after 30s
+  pendingContinue.set(roomId, { timer, type })
+}
+
+function continueToNextHand(roomId: string, type: 'cash' | 'game' | 'tournament'): void {
+  pendingContinue.delete(roomId)
+
+  if (type === 'tournament') {
+    const tEng = getTournamentEngineByTableId(roomId)
+    if (tEng) {
+      tEng.startNextHands()
+      const eng = tEng.getTable(roomId)
+      if (eng) {
+        io.to(roomId).emit(ServerEvent.GameState, eng.getState())
+        notifyTurn(io as any, roomId)
+      }
+    }
+    return
+  }
+
+  if (type === 'cash') {
+    const eng = tables.getTable(roomId)
+    if (eng) {
+      eng.startHand()
+      io.to(roomId).emit(ServerEvent.GameState, eng.getState())
+      if (tables.isPracticeTable(roomId)) scheduleAIActions(roomId)
+      notifyTurn(io as any, roomId)
+    }
+    return
+  }
+
+  if (type === 'game') {
+    const eng = getGameEngine(roomId)
+    if (eng) {
+      eng.startHand()
+      io.to(roomId).emit(ServerEvent.GameState, eng.getState())
+      notifyTurn(io as any, roomId)
+    }
+  }
+}
+
 // ─── Tournament End Callback Setup ──────────────────────
 
 function setupTournamentEndCallbacks(): void {
@@ -525,10 +597,17 @@ function setupTournamentEndCallbacks(): void {
           }
         }
       }
+      emitServerEvent('tournament:ended', state)
     })
   }
 }
 setupTournamentEndCallbacks()
+
+// ─── Hand Recorded Callback ─────────────────────────────
+
+setOnHandRecorded((hand: HandRecord) => {
+  emitServerEvent('hand:complete', hand)
+})
 
 // ─── Game Start Callback ────────────────────────────────
 
@@ -539,7 +618,32 @@ setOnGameStartCallback((gameId: string) => {
     io.to(gameId).emit(ServerEvent.GameState, state)
     emitLobbyUpdate()
   }
+  const game = getGame(gameId)
+  emitServerEvent('game:started', gameId, game?.name ?? gameId)
 })
+
+// ─── Discord Bridge: forward discord chat to game rooms ──
+
+onServerEvent('discord:chat', (roomId: string, userId: string, userName: string, text: string) => {
+  const msg: ChatMessage = {
+    id: `discord-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    playerId: userId,
+    playerName: `[Discord] ${userName}`,
+    text: text.slice(0, 200),
+    timestamp: Date.now(),
+  }
+  io.to(roomId).emit(ServerEvent.Chat, msg)
+})
+
+// ─── Discord Bot ──────────────────────────────────────────
+
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN ?? ''
+if (DISCORD_TOKEN) {
+  const linkedIds = getAllDiscordIds()
+  createDiscordBot(DISCORD_TOKEN, serverEvents, linkedIds).catch((err: Error) => console.error('[Discord] Failed to start bot:', err.message))
+} else {
+  console.log('[Discord] No DISCORD_TOKEN set — bot disabled')
+}
 
 // ─── Server Start ────────────────────────────────────────
 

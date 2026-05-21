@@ -34,9 +34,15 @@ export interface HandRecord {
 }
 
 const handHistory = new Map<number, HandRecord>()
+let onHandRecorded: ((hand: HandRecord) => void) | null = null
+
+export function setOnHandRecorded(cb: (hand: HandRecord) => void): void {
+  onHandRecorded = cb
+}
 
 export function storeHand(record: HandRecord): void {
   handHistory.set(record.handId, record)
+  onHandRecorded?.(record)
 }
 
 export function getHand(handId: number): HandRecord | undefined {

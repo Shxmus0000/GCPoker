@@ -1,0 +1,69 @@
+{
+  "lobby": "1506485353857421393",
+  "createTable": "1506485395557449808",
+  "tournaments": "1506485415350108210",
+  "highStakes": "1506485433565974538",
+  "badBeats": "1506485451031318608",
+  "withdrawals": "1506485496111567010",
+  "depositSupport": "1506485515376001105",
+  "depositSupportMessageId": "1506874869680177323",
+  "general": "1506485576717570158",
+  "reactRoles": "1506724836800598136",
+  "guestRoleId": "1506486065555312720",
+  "verifiedRoleId": "1506488010097692754",
+  "reactionRoleMessageId": "1506822429027078225",
+  "reactionRoles": [
+    {
+      "emoji": "📢",
+      "roleId": "1506486377674571867",
+      "label": "Poker Updates"
+    },
+    {
+      "emoji": "🏆",
+      "roleId": "1506486324625014824",
+      "label": "Tournament Ping"
+    },
+    {
+      "emoji": "🔥",
+      "roleId": "1506486432036814869",
+      "label": "High Stakes"
+    },
+    {
+      "emoji": "🎁",
+      "roleId": "1506486484247515167",
+      "label": "Giveaways"
+    }
+  ],
+  "pokerCategoryId": "1506485046150692874",
+  "configChannelId": "1506725777960341534",
+  "configMessageId": "1506818810836025397",
+  "lobbyMessageId": "1506825254042079415",
+  "supportCategoryId": "1506485122860318913",
+  "ticketLogChannelId": "1506836488111919235",
+  "ticketPanelChannelId": "1506485539090727023",
+  "ticketPanelMessageId": "1506838073613484043",
+  "staffRoleIds": [
+    "1506486183662977024",
+    "1506486133419147355",
+    "1506486750607048746",
+    "1506486002976559104"
+  ],
+  "transactionHistoryChannelId": "1506485496111567010",
+  "transactionHistoryMessageId": "1506842481348706395",
+  "transactionLogChannelId": "1506490686159982773",
+  "verifyChannelId": "1506488816045658213",
+  "verifyMessageId": "1506852141288132640",
+  "confirmDeletionChannelId": "1506724805024546929",
+  "confirmDeletionMessageId": "1506852204764725360",
+  "faqChannelId": "1506485322878292098",
+  "faqMessageId": "1506855033315266691",
+  "howToPlayChannelId": "1506485266205118464",
+  "howToPlayMessageId": "1506865398526644376",
+  "suggestionsChannelId": "1506485638294143026",
+  "suggestionsPanelMessageId": "1506867169043021934",
+  "suggestionsTrackerChannelId": "1506857830987075655",
+  "commandLogChannelId": "1506725801419083918",
+  "rulesChannelId": "1506485246928093276",
+  "rulesMessageId": "1506864653605535869",
+  "activeTables": "1506485395557449808"
+}

@@ -10,6 +10,8 @@ interface StoredUser {
   passwordHash: string
   salt: string
   createdAt: number
+  discordId?: string
+  discordTag?: string
 }
 
 interface StoredSession {
@@ -24,12 +26,16 @@ const SESSIONS_FILE = 'sessions.json'
 // In-memory caches loaded from disk
 let users = new Map<string, StoredUser>()
 let usernameIndex = new Map<string, StoredUser>()
+let discordIndex = new Map<string, string>() // discordId → userId
 let sessions = new Map<string, StoredSession>() // token → session
 
 function load(): void {
   const storedUsers = readJSON<StoredUser[]>(USERS_FILE, [])
   users = new Map(storedUsers.map(u => [u.id, u]))
   usernameIndex = new Map(storedUsers.map(u => [u.username, u]))
+  discordIndex = new Map(
+    storedUsers.filter(u => u.discordId).map(u => [u.discordId!, u.id])
+  )
 
   const storedSessions = readJSON<StoredSession[]>(SESSIONS_FILE, [])
   sessions = new Map(storedSessions.map(s => [s.token, s]))
@@ -125,4 +131,50 @@ export function creditBalance(userId: string, amount: number): void {
 
 export function getBalance(userId: string): number {
   return users.get(userId)?.balance ?? 0
+}
+
+export function getAllDiscordIds(): string[] {
+  return [...discordIndex.keys()]
+}
+
+export function getUserByDiscordId(discordId: string): StoredUser | undefined {
+  const userId = discordIndex.get(discordId)
+  return userId ? users.get(userId) : undefined
+}
+
+export function setDiscordId(userId: string, discordId: string, discordTag?: string): void {
+  const user = users.get(userId)
+  if (!user) throw new Error('User not found')
+  // Remove old discordId index entry if changing
+  if (user.discordId) {
+    discordIndex.delete(user.discordId)
+  }
+  user.discordId = discordId
+  user.discordTag = discordTag
+  if (discordId) {
+    discordIndex.set(discordId, userId)
+  }
+  saveUsers()
+}
+
+export function getDiscordId(userId: string): string | undefined {
+  return users.get(userId)?.discordId
+}
+
+export function getDiscordTag(userId: string): string | undefined {
+  return users.get(userId)?.discordTag
+}
+
+export function deleteUser(userId: string): void {
+  const user = users.get(userId)
+  if (!user) throw new Error('User not found')
+  if (user.discordId) discordIndex.delete(user.discordId)
+  usernameIndex.delete(user.username)
+  users.delete(userId)
+  // Remove all sessions for this user
+  for (const [token, s] of sessions) {
+    if (s.userId === userId) sessions.delete(token)
+  }
+  saveUsers()
+  saveSessions()
 }

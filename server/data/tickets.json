@@ -1,0 +1,33 @@
+{
+  "tickets": [
+    {
+      "id": "ticket-001",
+      "number": 1,
+      "channelId": "1506849184161202257",
+      "creatorId": "636330193157619743",
+      "creatorTag": "shxmus00",
+      "reason": "General Support",
+      "description": "goon",
+      "status": "closed",
+      "addedUsers": [],
+      "createdAt": 1779331241257,
+      "lastActivity": 1779331241257,
+      "closedAt": 1779331264359
+    },
+    {
+      "id": "ticket-002",
+      "number": 2,
+      "channelId": "1507024534350598174",
+      "creatorId": "636330193157619743",
+      "creatorTag": "shxmus00",
+      "reason": "General Support",
+      "description": "goon",
+      "status": "closed",
+      "addedUsers": [],
+      "createdAt": 1779373046959,
+      "lastActivity": 1779373046959,
+      "closedAt": 1779373069570
+    }
+  ],
+  "counter": 2
+}

@@ -7,11 +7,12 @@ export interface PayoutResult {
   prizes: number[] // prizes[0] = 1st place, prizes[1] = 2nd, etc.
 }
 
-export function calculatePayouts(playerCount: number, buyIn: number): PayoutResult {
-  const totalPool = playerCount * buyIn
+export function calculatePayouts(playerCount: number, buyIn: number, rebuyCount: number = 0): PayoutResult {
+  const totalEntries = playerCount + rebuyCount
+  const totalPool = totalEntries * buyIn
   const prizePool = Math.floor(totalPool * 0.9)
 
-  const positions = determinePaidPositions(playerCount)
+  const positions = determinePaidPositions(totalEntries)
 
   if (positions === 0) return { positions: 0, prizePool: 0, prizes: [] }
 

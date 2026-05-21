@@ -7,10 +7,31 @@ import {
   PlayerAction,
 } from '@gcpoker/shared'
 import { getSessionUser, debitBalance, creditBalance } from './users'
+import { emitServerEvent } from './events'
+import { readJSON, writeJSON } from './db'
 
 // ─── Game Store ─────────────────────────────────────────
 
-const games = new Map<string, PlayerGame>()
+const GAMES_FILE = 'games.json'
+
+function loadGames(): Map<string, PlayerGame> {
+  const data = readJSON<Record<string, PlayerGame>>(GAMES_FILE, {})
+  const map = new Map<string, PlayerGame>()
+  for (const [id, game] of Object.entries(data)) {
+    map.set(id, game)
+  }
+  return map
+}
+
+function saveGames(): void {
+  const obj: Record<string, PlayerGame> = {}
+  for (const [id, game] of games) {
+    obj[id] = game
+  }
+  writeJSON(GAMES_FILE, obj)
+}
+
+const games = loadGames()
 const gameEngines = new Map<string, GameEngine>()
 
 // ─── Router ─────────────────────────────────────────────
@@ -45,8 +66,8 @@ gameRouter.post('/create', (req, res) => {
   const user = getSessionUser(token)
   if (!user) return res.status(401).json({ error: 'Not authenticated' })
 
-  if (maxPlayers < 2 || maxPlayers > 9) {
-    return res.status(400).json({ error: 'maxPlayers must be 2-9' })
+  if (maxPlayers < 2 || maxPlayers > 8) {
+    return res.status(400).json({ error: 'maxPlayers must be 2-8' })
   }
   if (buyIn < 1) return res.status(400).json({ error: 'buyIn must be at least 1' })
   if (startingChips < 100) return res.status(400).json({ error: 'startingChips must be at least 100' })
@@ -64,6 +85,17 @@ gameRouter.post('/create', (req, res) => {
   }
 
   games.set(id, game)
+  saveGames()
+
+  emitServerEvent('game:created', {
+    id, name: game.name, creatorId: game.creatorId, creatorName: game.creatorName,
+    maxPlayers: game.maxPlayers, buyIn: game.buyIn,
+    startingChips: game.startingChips,
+    smallBlind, bigBlind,
+    status: game.status,
+    playerCount: game.players.length,
+    prizePool: Math.floor(game.buyIn * game.maxPlayers * 0.9),
+  })
 
   res.json({ id, game })
 })
@@ -96,6 +128,7 @@ gameRouter.post('/:id/join', (req, res) => {
     userId: user.id, name: user.name,
     stack: game.startingChips,
   })
+  saveGames()
 
   // Auto-start when full
   if (game.players.length >= game.maxPlayers) {
@@ -121,6 +154,7 @@ gameRouter.post('/:id/leave', (req, res) => {
 
   game.players.splice(idx, 1)
   creditBalance(user.id, game.buyIn)
+  saveGames()
 
   res.json({ ok: true })
 })
@@ -143,6 +177,8 @@ gameRouter.post('/:id/cancel', (req, res) => {
   }
 
   games.delete(req.params.id)
+  saveGames()
+  emitServerEvent('game:cancelled', req.params.id)
   res.json({ ok: true })
 })
 
@@ -158,10 +194,11 @@ export function setOnGameStartCallback(cb: (gameId: string) => void): void {
 
 function startGame(game: PlayerGame): void {
   game.status = GameStatus.Playing
+  saveGames()
 
   const { smallBlind, bigBlind } = calculateStartingBlinds(game.startingChips)
 
-  const engine = new GameEngine({ smallBlind, bigBlind })
+  const engine = new GameEngine({ smallBlind, bigBlind, tableId: game.id })
 
   for (const p of game.players) {
     engine.addPlayer(p.userId, p.name, p.stack)
@@ -221,6 +258,7 @@ function checkGameEliminations(game: PlayerGame, engine: GameEngine): void {
 
 function endGame(game: PlayerGame, engine: GameEngine, winnerId?: string): void {
   game.status = GameStatus.Complete
+  saveGames()
 
   // Eliminate remaining players who haven't been eliminated
   const state = engine.getState()
@@ -247,6 +285,8 @@ function endGame(game: PlayerGame, engine: GameEngine, winnerId?: string): void 
       creditBalance(sorted[i].userId, payouts.prizes[i])
     }
   }
+
+  emitServerEvent('game:ended', game)
 
   // Clean up engine after a delay
   setTimeout(() => {

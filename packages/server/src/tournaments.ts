@@ -6,6 +6,45 @@ import {
 } from '@gcpoker/shared'
 import { TournamentEngine, calculatePayouts, generateBlindLevels } from '@gcpoker/engine'
 import { getSessionUser, debitBalance, creditBalance } from './users'
+import { emitServerEvent } from './events'
+import { readJSON, writeJSON } from './db'
+
+// ─── Tournament Store ───────────────────────────────────
+
+const TOURNAMENTS_FILE = 'tournaments.json'
+
+function loadTournaments(): Map<string, TournamentEngine> {
+  const data = readJSON<Array<{ id: string; config: TournamentConfig }>>(TOURNAMENTS_FILE, [])
+  const map = new Map<string, TournamentEngine>()
+  for (const entry of data) {
+    const engine = new TournamentEngine(entry.config)
+    engine.setOnStartCallback((tid) => {
+      emitServerEvent('tournament:started', tid, entry.config.name)
+    })
+    engine.setOnEndCallback((state) => {
+      const statePrizes = engine.getPrizes()
+      for (const player of state.players) {
+        if (player.finishPosition && player.finishPosition <= statePrizes.length) {
+          const prize = statePrizes[player.finishPosition - 1]
+          if (prize > 0) {
+            creditBalance(player.userId, prize)
+          }
+        }
+      }
+      emitServerEvent('tournament:ended', state)
+    })
+    map.set(entry.id, engine)
+  }
+  return map
+}
+
+function saveTournaments(): void {
+  const arr: Array<{ id: string; config: TournamentConfig }> = []
+  for (const [id, engine] of tournaments) {
+    arr.push({ id, config: engine.getConfig() })
+  }
+  writeJSON(TOURNAMENTS_FILE, arr)
+}
 
 // ─── Default Tournament Templates ───────────────────────
 
@@ -27,9 +66,9 @@ function generatePrizePercentages(playerCount: number): number[] {
   return prizes.map(p => p / remaining)
 }
 
-// ─── Tournament Store ───────────────────────────────────
+// ─── Merge persisted tournaments with defaults ────────────
 
-const tournaments = new Map<string, TournamentEngine>()
+const tournaments = loadTournaments()
 
 function createDefaultTournaments(): void {
   const defaults: TournamentConfig[] = [
@@ -44,20 +83,22 @@ function createDefaultTournaments(): void {
       maxPerTable: 6,
       minPlayers: 2,
       lateRegistrationMinutes: 0,
+      rebuyDuration: 0,
       blindLevels: generateBlindLevelsFor(1500, false),
       prizeStructure: generatePrizePercentages(6),
     },
     {
-      id: 'sng-9',
-      name: 'SNG (9-max)',
+      id: 'sng-8',
+      name: 'SNG (8-max)',
       format: TournamentFormat.SitNGo,
       buyIn: 100,
       rake: 0.10,
       startingStack: 3000,
-      maxPlayers: 9,
-      maxPerTable: 9,
+      maxPlayers: 8,
+      maxPerTable: 8,
       minPlayers: 2,
       lateRegistrationMinutes: 0,
+      rebuyDuration: 0,
       blindLevels: generateBlindLevelsFor(3000, false),
       prizeStructure: generatePrizePercentages(9),
     },
@@ -69,17 +110,37 @@ function createDefaultTournaments(): void {
       rake: 0.10,
       startingStack: 5000,
       maxPlayers: 100,
-      maxPerTable: 9,
+      maxPerTable: 8,
       minPlayers: 10,
       lateRegistrationMinutes: 30,
+      rebuyDuration: 0,
       blindLevels: generateBlindLevelsFor(5000, true),
       prizeStructure: generatePrizePercentages(100),
     },
   ]
 
   for (const cfg of defaults) {
-    tournaments.set(cfg.id, new TournamentEngine(cfg))
+    if (!tournaments.has(cfg.id)) {
+      const engine = new TournamentEngine(cfg)
+      engine.setOnStartCallback((tid) => {
+        emitServerEvent('tournament:started', tid, cfg.name)
+      })
+      engine.setOnEndCallback((state) => {
+        const statePrizes = engine.getPrizes()
+        for (const player of state.players) {
+          if (player.finishPosition && player.finishPosition <= statePrizes.length) {
+            const prize = statePrizes[player.finishPosition - 1]
+            if (prize > 0) {
+              creditBalance(player.userId, prize)
+            }
+          }
+        }
+        emitServerEvent('tournament:ended', state)
+      })
+      tournaments.set(cfg.id, engine)
+    }
   }
+  saveTournaments()
 }
 
 createDefaultTournaments()
@@ -113,7 +174,7 @@ tournamentRouter.get('/', (_req, res) => {
 
 // Create a new tournament
 tournamentRouter.post('/create', (req, res) => {
-  const { name, maxPlayers, buyIn, startingChips, token } = req.body
+  const { name, maxPlayers, buyIn, startingChips, token, rebuyDuration } = req.body
   if (!name || !maxPlayers || !buyIn || !startingChips || !token) {
     return res.status(400).json({ error: 'name, maxPlayers, buyIn, startingChips, token required' })
   }
@@ -129,7 +190,7 @@ tournamentRouter.post('/create', (req, res) => {
   if (user.balance < buyIn) return res.status(400).json({ error: 'Insufficient balance' })
 
   const id = uuid().slice(0, 8)
-  const maxPerTable = Math.min(9, maxPlayers)
+  const maxPerTable = Math.min(8, maxPlayers)
   const isMultiTable = maxPlayers > maxPerTable
   const format = isMultiTable ? TournamentFormat.MultiTable : TournamentFormat.SitNGo
 
@@ -147,6 +208,7 @@ tournamentRouter.post('/create', (req, res) => {
     maxPerTable,
     minPlayers: 2,
     lateRegistrationMinutes: 0,
+    rebuyDuration: rebuyDuration ?? 60,
     blindLevels,
     prizeStructure,
     creatorId: user.id,
@@ -155,10 +217,45 @@ tournamentRouter.post('/create', (req, res) => {
 
   const engine = new TournamentEngine(config)
   tournaments.set(id, engine)
+  saveTournaments()
+
+  engine.setOnStartCallback((tid) => {
+    saveTournaments()
+    emitServerEvent('tournament:started', tid, config.name)
+  })
+
+  engine.setOnEndCallback((state) => {
+    const statePrizes = engine.getPrizes()
+    for (const player of state.players) {
+      if (player.finishPosition && player.finishPosition <= statePrizes.length) {
+        const prize = statePrizes[player.finishPosition - 1]
+        if (prize > 0) {
+          creditBalance(player.userId, prize)
+        }
+      }
+    }
+    emitServerEvent('tournament:ended', state)
+  })
 
   // Auto-register creator
   debitBalance(user.id, buyIn)
   engine.registerPlayer(user.id, user.name)
+
+  const state0 = engine.getState()
+  emitServerEvent('tournament:created', {
+    id,
+    name: config.name,
+    format: config.format,
+    status: state0.status,
+    buyIn: config.buyIn,
+    prizePool: state0.prizePool || config.buyIn * config.maxPlayers * (1 - config.rake),
+    maxPlayers: config.maxPlayers,
+    maxPerTable: config.maxPerTable,
+    registrations: state0.registrations,
+    currentLevel: state0.currentLevel + 1,
+    creatorId: config.creatorId,
+    creatorName: config.creatorName,
+  })
 
   res.json({ id, config: engine.getConfig(), state: engine.getState() })
 })
@@ -196,6 +293,8 @@ tournamentRouter.post('/:id/cancel', (req, res) => {
   }
 
   tournaments.delete(req.params.id)
+  saveTournaments()
+  emitServerEvent('tournament:cancelled', req.params.id)
   res.json({ ok: true })
 })
 
@@ -219,8 +318,37 @@ tournamentRouter.post('/:id/register', (req, res) => {
   if (!ok) return res.status(400).json({ error: 'Unable to register' })
 
   debitBalance(user.id, cfg.buyIn)
+  saveTournaments()
+
+  const regState = eng.getState()
+  emitServerEvent('tournament:register', req.params.id, user.id, user.name, regState.registrations, cfg.maxPlayers)
 
   res.json({ ok: true, state: eng.getState() })
+})
+
+// Rebuy for eliminated player
+tournamentRouter.post('/:id/rebuy', (req, res) => {
+  const { token } = req.body
+  if (!token) return res.status(400).json({ error: 'token required' })
+
+  const user = getSessionUser(token)
+  if (!user) return res.status(401).json({ error: 'Not authenticated' })
+
+  const eng = tournaments.get(req.params.id)
+  if (!eng) return res.status(404).json({ error: 'Tournament not found' })
+
+  const cfg = eng.getConfig()
+  const check = eng.canRebuy(user.id)
+  if (!check.can) return res.status(400).json({ error: check.reason || 'Cannot rebuy' })
+
+  if (user.balance < cfg.buyIn) return res.status(400).json({ error: 'Insufficient balance for rebuy' })
+
+  debitBalance(user.id, cfg.buyIn)
+  const ok = eng.rebuyPlayer(user.id)
+  if (!ok) return res.status(400).json({ error: 'Rebuy failed' })
+
+  saveTournaments()
+  res.json({ success: true, state: eng.getState() })
 })
 
 // Get tournament leaderboard

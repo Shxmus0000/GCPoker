@@ -130,5 +130,49 @@
     "completedAt": 1779237485383,
     "botMessage": "3408419427351915",
     "gcCode": "3408419427351915"
+  },
+  {
+    "id": "fad38437-6c81-4234-843d-fe64a751d0c7",
+    "userId": "ae782454-85dd-4e26-8167-d0612dd197bc",
+    "type": "deposit",
+    "amount": 1,
+    "gcCode": "6607988937188530",
+    "status": "completed",
+    "createdAt": 1779307764327,
+    "completedAt": 1779307797857,
+    "botMessage": "Redeemed 1 GC"
+  },
+  {
+    "id": "31c05327-75a0-458e-896b-e80f23fda732",
+    "userId": "ae782454-85dd-4e26-8167-d0612dd197bc",
+    "type": "withdrawal",
+    "amount": 1,
+    "status": "completed",
+    "createdAt": 1779307810038,
+    "completedAt": 1779307836214,
+    "botMessage": "2512001465115769",
+    "gcCode": "2512001465115769"
+  },
+  {
+    "id": "c9d16841-798f-4971-9ef1-4c47dcc9bbd3",
+    "userId": "ae782454-85dd-4e26-8167-d0612dd197bc",
+    "type": "deposit",
+    "amount": 1,
+    "gcCode": "1873756384201520",
+    "status": "completed",
+    "createdAt": 1779335405409,
+    "completedAt": 1779335440459,
+    "botMessage": "Redeemed 1 GC"
+  },
+  {
+    "id": "be811cf7-d09b-45cc-ad32-b4bbefb81540",
+    "userId": "ae782454-85dd-4e26-8167-d0612dd197bc",
+    "type": "withdrawal",
+    "amount": 1,
+    "status": "completed",
+    "createdAt": 1779335450476,
+    "completedAt": 1779335475908,
+    "botMessage": "1371219684678019",
+    "gcCode": "1371219684678019"
   }
 ]

@@ -184,6 +184,7 @@ export enum ClientEvent {
   BuyIn = 'game:buyIn',
   Chat = 'table:chat',
   ShowCards = 'game:showCards',
+  Continue = 'game:continue',
 }
 
 export enum ServerEvent {
@@ -259,6 +260,7 @@ export interface TournamentConfig {
   maxPerTable: number
   minPlayers: number
   lateRegistrationMinutes: number
+  rebuyDuration: number
   blindLevels: BlindLevel[]
   prizeStructure: number[]
   creatorId?: string
@@ -289,6 +291,7 @@ export interface TournamentState {
   registrations: number
   entries: number
   reentries: number
+  startedAt?: number
   blindLevels: BlindLevel[]
 }
 
@@ -379,6 +382,18 @@ export interface ChatMessage {
   timestamp: number
 }
 
+// ─── Discord Link Types ──────────────────────────────────
+export interface DiscordLinkRequest {
+  code: string
+  token: string
+}
+
+export interface DiscordLinkResponse {
+  success: boolean
+  discordId?: string
+  error?: string
+}
+
 // ─── Bot / Cashier Queue Types ──────────────────────────
 export enum BotJobStatus {
   Queued = 'queued',
@@ -467,5 +482,6 @@ export interface CreateTournamentRequest {
   maxPerTable: number
   buyIn: number
   startingChips: number
+  rebuyDuration?: number
   token: string
 }

@@ -2,7 +2,12 @@
   "name": "gcpoker",
   "private": true,
   "workspaces": [
-    "packages/*"
+    "packages/shared",
+    "packages/engine",
+    "packages/server",
+    "packages/web",
+    "packages/discord",
+    "packages/bot"
   ],
   "scripts": {
     "build": "npm run build -w packages/shared && npm run build -w packages/engine && concurrently \"npm run build -w packages/server\" \"npm run build -w packages/web\" \"npm run build -w packages/bot\"",

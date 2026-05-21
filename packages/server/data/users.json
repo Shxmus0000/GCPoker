@@ -12,9 +12,20 @@
     "id": "ae782454-85dd-4e26-8167-d0612dd197bc",
     "username": "sonodio",
     "name": "sonodio",
-    "balance": 9998,
+    "balance": 9496,
     "passwordHash": "51178800de3a56de1d1ebfde8a92f0349c38b46f685beb36fb0c7779fec9ca9c086c858ff8d9157080f24bc8130673cb56ad70e2c2cac7932c674eee25b60caf",
     "salt": "44e887f70d5ffc6573ed7717b13104da",
-    "createdAt": 1779210770011
+    "createdAt": 1779210770011,
+    "discordId": "636330193157619743",
+    "discordTag": "shxmus00"
+  },
+  {
+    "id": "bdef5f2d-9412-41e7-8154-d558286c2baa",
+    "username": "sonodiddy",
+    "name": "sonodiddy",
+    "balance": 10000,
+    "passwordHash": "1bf239a183dae66d1358471b6ffcd029b35a895c6c847e761f6d6bff2eb22024c722ab7634f4b6d953ff077347e172dc1264c2ddbbb48972b94c9b73703aea99",
+    "salt": "3746cbddecbb4d565c4064754d7eb234",
+    "createdAt": 1779308154551
   }
 ]

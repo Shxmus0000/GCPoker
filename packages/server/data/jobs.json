@@ -515,5 +515,49 @@
     "claimedAt": 1779237461528,
     "completedAt": 1779237485381,
     "resultMessage": "3408419427351915"
+  },
+  {
+    "id": "fad38437-6c81-4234-843d-fe64a751d0c7",
+    "type": "deposit",
+    "gcCode": "6607988937188530",
+    "userId": "ae782454-85dd-4e26-8167-d0612dd197bc",
+    "status": "completed",
+    "createdAt": 1779307764329,
+    "claimedAt": 1779307766126,
+    "completedAt": 1779307797856,
+    "resultMessage": "Redeemed 1 GC"
+  },
+  {
+    "id": "31c05327-75a0-458e-896b-e80f23fda732",
+    "type": "withdrawal",
+    "amount": 1,
+    "userId": "ae782454-85dd-4e26-8167-d0612dd197bc",
+    "status": "completed",
+    "createdAt": 1779307810039,
+    "claimedAt": 1779307812923,
+    "completedAt": 1779307836213,
+    "resultMessage": "2512001465115769"
+  },
+  {
+    "id": "c9d16841-798f-4971-9ef1-4c47dcc9bbd3",
+    "type": "deposit",
+    "gcCode": "1873756384201520",
+    "userId": "ae782454-85dd-4e26-8167-d0612dd197bc",
+    "status": "completed",
+    "createdAt": 1779335405411,
+    "claimedAt": 1779335406559,
+    "completedAt": 1779335440458,
+    "resultMessage": "Redeemed 1 GC"
+  },
+  {
+    "id": "be811cf7-d09b-45cc-ad32-b4bbefb81540",
+    "type": "withdrawal",
+    "amount": 1,
+    "userId": "ae782454-85dd-4e26-8167-d0612dd197bc",
+    "status": "completed",
+    "createdAt": 1779335450477,
+    "claimedAt": 1779335452519,
+    "completedAt": 1779335475907,
+    "resultMessage": "1371219684678019"
   }
 ]

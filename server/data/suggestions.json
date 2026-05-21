@@ -1,0 +1,35 @@
+{
+  "suggestions": [
+    {
+      "id": "1",
+      "messageId": "1506857976080896010",
+      "channelId": "1506485638294143026",
+      "authorId": "636330193157619743",
+      "authorName": "shxmus00",
+      "content": "gooning",
+      "upvotes": [
+        "636330193157619743"
+      ],
+      "downvotes": [],
+      "createdAt": 1779333337047,
+      "tracked": true,
+      "trackerMessageId": "1506858003440205924"
+    },
+    {
+      "id": "2",
+      "messageId": "1506867165503029248",
+      "channelId": "1506485638294143026",
+      "authorId": "636330193157619743",
+      "authorName": "shxmus00",
+      "content": "Sample Suggestion",
+      "upvotes": [
+        "636330193157619743"
+      ],
+      "downvotes": [],
+      "createdAt": 1779335527939,
+      "tracked": true,
+      "trackerMessageId": "1506867178643914814"
+    }
+  ],
+  "counter": 2
+}

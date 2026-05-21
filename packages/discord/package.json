@@ -1,0 +1,22 @@
+{
+  "name": "@gcpoker/discord",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@gcpoker/engine": "*",
+    "@gcpoker/shared": "*",
+    "discord.js": "^14.14.0",
+    "pdfkit": "^0.15.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/pdfkit": "^0.17.6",
+    "typescript": "^5.4.0"
+  }
+}

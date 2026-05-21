@@ -13,6 +13,7 @@ export class TournamentEngine {
   private tables: Map<string, GameEngine> = new Map()
   private levelTimer: ReturnType<typeof setInterval> | null = null
   private onEndCallback?: (state: TournamentState) => void
+  private onStartCallback?: (tournamentId: string) => void
 
   constructor(config: TournamentConfig) {
     this.config = config
@@ -33,6 +34,10 @@ export class TournamentEngine {
 
   setOnEndCallback(cb: (state: TournamentState) => void): void {
     this.onEndCallback = cb
+  }
+
+  setOnStartCallback(cb: (tournamentId: string) => void): void {
+    this.onStartCallback = cb
   }
 
   // ─── Registration ──────────────────────────────────────
@@ -72,10 +77,12 @@ export class TournamentEngine {
     if (this.state.status !== TournamentStatus.Registering) return
 
     this.state.status = TournamentStatus.Running
+    this.state.startedAt = Date.now()
     this.createTables()
     this.assignPlayersToTables()
     this.startAllTables()
     this.startLevelTimer()
+    this.onStartCallback?.(this.config.id)
   }
 
   private createTables(): void {
@@ -87,6 +94,7 @@ export class TournamentEngine {
       const engine = new GameEngine({
         smallBlind: this.config.blindLevels[0].smallBlind,
         bigBlind: this.config.blindLevels[0].bigBlind,
+        tableId,
       })
       this.tables.set(tableId, engine)
 
@@ -172,10 +180,11 @@ export class TournamentEngine {
     const activePlayers = this.state.players.filter(p => !p.eliminatedAt)
     if (activePlayers.length <= 1) {
       this.endTournament()
-      return
     }
+  }
 
-    // Start next hand on all active tables
+  startNextHands(): void {
+    if (this.state.status !== TournamentStatus.Running) return
     for (const [, engine] of this.tables) {
       const state = engine.getState()
       if (state.phase === GamePhase.Complete) {
@@ -254,6 +263,64 @@ export class TournamentEngine {
 
   // ─── Prize Distribution ────────────────────────────────
 
+  canRebuy(userId: string): { can: boolean; reason?: string } {
+    if (this.state.status !== TournamentStatus.Running) {
+      return { can: false, reason: 'Tournament is not running' }
+    }
+
+    const player = this.state.players.find(p => p.userId === userId)
+    if (!player) {
+      return { can: false, reason: 'Not registered' }
+    }
+    if (!player.eliminatedAt) {
+      return { can: false, reason: 'Not eliminated' }
+    }
+
+    const startedAt = this.state.startedAt
+    if (!startedAt) {
+      return { can: false, reason: 'Tournament not started' }
+    }
+
+    const elapsed = Date.now() - startedAt
+    const rebuyWindowMs = this.config.rebuyDuration * 60 * 1000
+    if (elapsed > rebuyWindowMs) {
+      return { can: false, reason: 'Rebuy period has ended' }
+    }
+
+    return { can: true }
+  }
+
+  rebuyPlayer(userId: string): boolean {
+    const check = this.canRebuy(userId)
+    if (!check.can) return false
+
+    const player = this.state.players.find(p => p.userId === userId)!
+    player.eliminatedAt = undefined
+    player.finishPosition = undefined
+    player.stack = this.config.startingStack
+    this.state.reentries++
+
+    // Assign to a table that has room
+    for (const [tid, tEngine] of this.tables) {
+      const tState = tEngine.getState()
+      const realPlayers = tState.players.filter((p: Player) => !p.id.startsWith('sys-'))
+      if (realPlayers.length < this.config.maxPerTable) {
+        tEngine.addPlayer(player.userId, player.name, player.stack)
+        player.tableId = tid
+        player.seatIndex = tState.players.findIndex(
+          (p: Player) => p.id === player.userId
+        )
+        break
+      }
+    }
+
+    this.state.prizePool = this.computePrizePool()
+    const { prizes } = calculatePayouts(this.state.players.length, this.config.buyIn, this.state.reentries)
+    this.state.prizes = prizes
+
+    return true
+  }
+
   private endTournament(): void {
     if (this.levelTimer) clearInterval(this.levelTimer)
     this.state.status = TournamentStatus.Completed
@@ -278,11 +345,11 @@ export class TournamentEngine {
       }
     }
 
-    // Compute prize pool
+    // Compute prize pool including rebuys
     this.state.prizePool = this.computePrizePool()
 
     // Distribute prizes using dynamic payout calculation
-    const { prizes } = calculatePayouts(this.state.players.length, this.config.buyIn)
+    const { prizes } = calculatePayouts(this.state.players.length, this.config.buyIn, this.state.reentries)
     this.state.prizes = prizes
 
     if (this.onEndCallback) {
@@ -295,7 +362,8 @@ export class TournamentEngine {
   }
 
   private computePrizePool(): number {
-    const totalBuyIns = this.state.players.length * (this.config.buyIn)
+    const totalEntries = this.state.players.length + this.state.reentries
+    const totalBuyIns = totalEntries * (this.config.buyIn)
     const totalRake = totalBuyIns * this.config.rake
     return totalBuyIns - totalRake
   }
@@ -328,6 +396,7 @@ export class TournamentEngine {
       registrations: 0,
       entries: 0,
       reentries: 0,
+      startedAt: undefined,
       blindLevels: this.config.blindLevels,
     }
   }

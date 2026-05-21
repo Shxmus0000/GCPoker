@@ -1,0 +1,289 @@
+[
+  {
+    "id": "sng-6",
+    "config": {
+      "id": "sng-6",
+      "name": "Turbo SNG (6-max)",
+      "format": "sng",
+      "buyIn": 50,
+      "rake": 0.1,
+      "startingStack": 1500,
+      "maxPlayers": 6,
+      "maxPerTable": 6,
+      "minPlayers": 2,
+      "lateRegistrationMinutes": 0,
+      "blindLevels": [
+        {
+          "level": 1,
+          "smallBlind": 10,
+          "bigBlind": 20,
+          "duration": 10
+        },
+        {
+          "level": 2,
+          "smallBlind": 15,
+          "bigBlind": 30,
+          "duration": 10
+        },
+        {
+          "level": 3,
+          "smallBlind": 23,
+          "bigBlind": 45,
+          "duration": 10
+        },
+        {
+          "level": 4,
+          "smallBlind": 35,
+          "bigBlind": 70,
+          "duration": 10
+        },
+        {
+          "level": 5,
+          "smallBlind": 50,
+          "bigBlind": 100,
+          "duration": 10
+        },
+        {
+          "level": 6,
+          "smallBlind": 75,
+          "bigBlind": 150,
+          "duration": 10
+        },
+        {
+          "level": 7,
+          "smallBlind": 115,
+          "bigBlind": 230,
+          "duration": 10
+        },
+        {
+          "level": 8,
+          "smallBlind": 170,
+          "bigBlind": 340,
+          "duration": 10
+        },
+        {
+          "level": 9,
+          "smallBlind": 258,
+          "bigBlind": 515,
+          "duration": 10
+        },
+        {
+          "level": 10,
+          "smallBlind": 385,
+          "bigBlind": 770,
+          "duration": 10
+        },
+        {
+          "level": 11,
+          "smallBlind": 578,
+          "bigBlind": 1155,
+          "duration": 10
+        },
+        {
+          "level": 12,
+          "smallBlind": 865,
+          "bigBlind": 1730,
+          "duration": 10
+        }
+      ],
+      "prizeStructure": [
+        0.6666666666666666,
+        0.3333333333333333
+      ]
+    }
+  },
+  {
+    "id": "sng-8",
+    "config": {
+      "id": "sng-8",
+      "name": "SNG (8-max)",
+      "format": "sng",
+      "buyIn": 100,
+      "rake": 0.1,
+      "startingStack": 3000,
+      "maxPlayers": 8,
+      "maxPerTable": 8,
+      "minPlayers": 2,
+      "lateRegistrationMinutes": 0,
+      "blindLevels": [
+        {
+          "level": 1,
+          "smallBlind": 20,
+          "bigBlind": 40,
+          "duration": 10
+        },
+        {
+          "level": 2,
+          "smallBlind": 30,
+          "bigBlind": 60,
+          "duration": 10
+        },
+        {
+          "level": 3,
+          "smallBlind": 45,
+          "bigBlind": 90,
+          "duration": 10
+        },
+        {
+          "level": 4,
+          "smallBlind": 68,
+          "bigBlind": 135,
+          "duration": 10
+        },
+        {
+          "level": 5,
+          "smallBlind": 103,
+          "bigBlind": 205,
+          "duration": 10
+        },
+        {
+          "level": 6,
+          "smallBlind": 153,
+          "bigBlind": 305,
+          "duration": 10
+        },
+        {
+          "level": 7,
+          "smallBlind": 228,
+          "bigBlind": 455,
+          "duration": 10
+        },
+        {
+          "level": 8,
+          "smallBlind": 343,
+          "bigBlind": 685,
+          "duration": 10
+        },
+        {
+          "level": 9,
+          "smallBlind": 513,
+          "bigBlind": 1025,
+          "duration": 10
+        },
+        {
+          "level": 10,
+          "smallBlind": 770,
+          "bigBlind": 1540,
+          "duration": 10
+        },
+        {
+          "level": 11,
+          "smallBlind": 1153,
+          "bigBlind": 2305,
+          "duration": 10
+        },
+        {
+          "level": 12,
+          "smallBlind": 1730,
+          "bigBlind": 3460,
+          "duration": 10
+        }
+      ],
+      "prizeStructure": [
+        0.5,
+        0.3333333333333333,
+        0.16666666666666666
+      ]
+    }
+  },
+  {
+    "id": "mtt-daily",
+    "config": {
+      "id": "mtt-daily",
+      "name": "Daily Freezeout MTT",
+      "format": "mtt",
+      "buyIn": 200,
+      "rake": 0.1,
+      "startingStack": 5000,
+      "maxPlayers": 100,
+      "maxPerTable": 8,
+      "minPlayers": 10,
+      "lateRegistrationMinutes": 30,
+      "blindLevels": [
+        {
+          "level": 1,
+          "smallBlind": 33,
+          "bigBlind": 65,
+          "duration": 15
+        },
+        {
+          "level": 2,
+          "smallBlind": 50,
+          "bigBlind": 100,
+          "duration": 15
+        },
+        {
+          "level": 3,
+          "smallBlind": 73,
+          "bigBlind": 145,
+          "duration": 15
+        },
+        {
+          "level": 4,
+          "smallBlind": 110,
+          "bigBlind": 220,
+          "duration": 15
+        },
+        {
+          "level": 5,
+          "smallBlind": 165,
+          "bigBlind": 330,
+          "duration": 15
+        },
+        {
+          "level": 6,
+          "smallBlind": 248,
+          "bigBlind": 495,
+          "duration": 15
+        },
+        {
+          "level": 7,
+          "smallBlind": 370,
+          "bigBlind": 740,
+          "duration": 15
+        },
+        {
+          "level": 8,
+          "smallBlind": 555,
+          "bigBlind": 1110,
+          "duration": 15
+        },
+        {
+          "level": 9,
+          "smallBlind": 833,
+          "bigBlind": 1665,
+          "duration": 15
+        },
+        {
+          "level": 10,
+          "smallBlind": 1250,
+          "bigBlind": 2500,
+          "duration": 15
+        },
+        {
+          "level": 11,
+          "smallBlind": 1875,
+          "bigBlind": 3750,
+          "duration": 15
+        },
+        {
+          "level": 12,
+          "smallBlind": 2810,
+          "bigBlind": 5620,
+          "duration": 15
+        }
+      ],
+      "prizeStructure": [
+        0.2,
+        0.17777777777777778,
+        0.15555555555555556,
+        0.13333333333333333,
+        0.1111111111111111,
+        0.08888888888888889,
+        0.06666666666666667,
+        0.044444444444444446,
+        0.022222222222222223
+      ]
+    }
+  }
+]
