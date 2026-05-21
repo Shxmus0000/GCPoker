@@ -1,6 +1,6 @@
 [build]
 builder = "nixpacks"
-buildCommand = "npm run build -w packages/shared && npm run build -w packages/engine && npm run build -w packages/web"
+buildCommand = "npm install --include=dev && npm run build -w packages/shared && npm run build -w packages/engine && npm run build -w packages/web"
 
 [deploy]
 startCommand = "npm run start -w packages/web"
