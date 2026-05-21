@@ -1,0 +1,6 @@
+[build]
+builder = "nixpacks"
+buildCommand = "cd ../.. && npm install && npm run build -w packages/shared && npm run build -w packages/engine && npm run build -w packages/web"
+
+[deploy]
+startCommand = "npm run start -w packages/web"
