@@ -1,6 +1,6 @@
 [build]
 builder = "nixpacks"
-buildCommand = "cd ../.. && npm install && npm run build -w packages/shared && npm run build -w packages/engine && npm run build -w packages/server"
+buildCommand = "npm run build -w packages/shared && npm run build -w packages/engine && npm run build -w packages/server"
 
 [deploy]
 startCommand = "node packages/server/dist/index.js"
